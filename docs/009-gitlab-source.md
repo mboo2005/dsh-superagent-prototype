@@ -31,7 +31,7 @@ Every field has a default because a disabled Source is still resolved from its s
 The CLI must be signed in only as the agent account. Keep its credentials out of the settings, as with `gh`:
 
 ```sh
-GITLAB_CONFIG_DIR=/home/me/.config/glab-agent glab auth login --hostname gitlab.example.com
+GLAB_CONFIG_DIR=/home/me/.config/glab-agent glab auth login --hostname gitlab.example.com
 ```
 
 If the CLI is a wrapper, point `cli` at the wrapper. The host calls `glab api --hostname <host> <path>` and expects JSON. A token in the wrapper's environment is not read or stored by dsh-superagent.
@@ -47,7 +47,7 @@ The execution environment exposes `DSH_SUPERAGENT_GITLAB_URL`, `DSH_SUPERAGENT_G
 | Notes | `GET projects/<encoded project>/(issues\|merge_requests)/<iid>/notes?sort=asc&order_by=created_at&per_page=100` for context; polling asks for `sort=desc` so the newest notes are never behind an old page |
 | Reply | `POST projects/<encoded project>/(issues\|merge_requests)/<iid>/notes` with `body` |
 
-All calls use the configured CLI and hostname, and only the Source's project. To-dos whose target belongs to another project are ignored.
+All calls use the configured CLI and hostname, and only the Source's project. To-dos whose target names another project, or has no URL to check, are ignored.
 
 ## Limitations of this slice
 

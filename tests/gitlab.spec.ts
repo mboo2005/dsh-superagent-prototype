@@ -60,6 +60,7 @@ describe('GitLab triggers', () => {
     expect(trigger?.threads).toEqual([{ source: 'gitlab', id: 'mr:9' }])
     expect(trigger?.addressed).toBe('direct')
     expect(todoTrigger({ ...todo, target_type: 'Epic', target: { iid: 1 } }, config())).toBeUndefined()
+    expect(todoTrigger({ ...todo, target: { iid: 9, title: 'Fix it' }, target_url: undefined }, config())).toBeUndefined()
     expect(todoTrigger({ ...todo, target_url: 'https://gitlab.example.com/other/project/-/issues/1',
       target: { iid: 9, web_url: 'https://gitlab.example.com/other/project/-/issues/1' } }, config())).toBeUndefined()
   })
@@ -119,13 +120,13 @@ describe('GitLab polling', () => {
     expect(receive.mock.calls.map(call => call[0].text)).toEqual(['older', 'newest'])
   })
   it('receives pending to-dos and skips the agent\'s own', async () => {
-    const todos = [{ id: 1, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
+    const todos = [{ id: 1, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it', web_url: 'https://gitlab.example.com/group/sub/project/-/issues/4' },
       created_at: '2026-01-02T00:00:00.000Z' },
-    { id: 2, author: { username: 'agent' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
+    { id: 2, author: { username: 'agent' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it', web_url: 'https://gitlab.example.com/group/sub/project/-/issues/4' },
       created_at: '2026-01-02T00:00:00.000Z' },
     { id: 3, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Commit', target: null,
       created_at: '2026-01-02T00:00:00.000Z' },
-    { id: 4, author: { username: 'alice' }, action_name: 'build_failed', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
+    { id: 4, author: { username: 'alice' }, action_name: 'build_failed', target_type: 'Issue', target: { iid: 4, title: 'Do it', web_url: 'https://gitlab.example.com/group/sub/project/-/issues/4' },
       created_at: '2026-01-02T00:00:00.000Z' }]
     const run3 = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? JSON.stringify(todos) : '[]')
     const receive = vi.fn()

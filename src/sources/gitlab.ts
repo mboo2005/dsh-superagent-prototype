@@ -119,8 +119,8 @@ export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | u
   const iid = todoTarget?.iid
   if (!kind || !iid) return undefined
   const url = todoTarget.web_url ?? todo.target_url ?? undefined
-  // The to-do list of one account spans every project; this Source answers only for its own project.
-  if (url && config.url && !url.startsWith(`${config.url.replace(/\/$/, '')}/${config.project}/`)) return undefined
+  // The to-do list of one account spans every project; without a URL the project is unknown, so never answer it.
+  if (!url || !config.url || !url.startsWith(`${config.url.replace(/\/$/, '')}/${config.project}/`)) return undefined
   const target = place(kind, iid, config, url)
   return { id: key('gitlab-todo', config.project, kind, String(iid), String(todo.id)), source: SOURCE,
     threads: [{ source: SOURCE, id: threadId(kind, iid) }], actor: { source: SOURCE, id: todo.author.username },
@@ -237,7 +237,7 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
     { key: 'project', type: 'text', label: { zh: '监听的项目', en: 'Project' },
       hint: { zh: '写作 group/project，可以有嵌套 group。这个来源只接收这个项目的待办和讨论。', en: 'Written group/project, with nested groups allowed. This Source receives only this project\'s to-dos and discussion.' } },
     { key: 'cli', type: 'text', advanced: true, label: { zh: '智能体的 GitLab CLI', en: 'Agent GitLab CLI' },
-      hint: { zh: '命令名或绝对路径，通常是用 GITLAB_CONFIG_DIR 登录智能体账号的 glab 包装脚本。', en: 'A command name or absolute path, usually a glab wrapper signed in to the agent account through GITLAB_CONFIG_DIR.' } },
+      hint: { zh: '命令名或绝对路径，通常是用 GLAB_CONFIG_DIR 登录智能体账号的 glab 包装脚本。', en: 'A command name or absolute path, usually a glab wrapper signed in to the agent account through GLAB_CONFIG_DIR.' } },
     { key: 'account', type: 'text', label: { zh: '智能体的 GitLab 账号', en: 'Agent GitLab account' },
       hint: { zh: '用户名；用来识别它自己的评论和 @ 提及。', en: 'The username; used to recognize its own comments and mentions.' } },
     { key: 'email', type: 'text', advanced: true, label: { zh: '提交邮箱', en: 'Commit email' },
