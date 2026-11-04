@@ -182,11 +182,13 @@ Each kind has a health entry under its name. It reports an error once one of its
 
 ### Sources
 
-Sources extend the host through `SourceKind`, defined in `src/sources/kind.ts`. A kind declares its identity, title, description, configuration `schema` and `fields`, derived `facts`, and `health` entries. Optional behavior includes `scope`, a `channel` (`allowed`, `send`, `link`), `threadContext`, `find`, `policy`, `environment` and `refreshLabels`.
+Sources extend the host through `SourceKind`, defined in `src/sources/kind.ts`. A kind declares its identity, title, description, configuration `schema` and `fields`, derived `facts`, and `health` entries. Optional behavior includes `scope`, a `channel` (`allowed`, `send`, `link`), `threadContext`, `change`, `find`, `policy`, `environment` and `refreshLabels`.
+
+`change` (`src/sources/change.ts`) is the kind-neutral change lifecycle a kind supplies for its pull or merge requests: tickets bind and end with them, and `endNotices` turns a ticket's end into the chat notices of its conversations. A kind that declares no `change` has no changes.
 
 `SourceRegistry` (`registry.ts`) owns registered kinds and stored instances, and implements the Engine's `SourceScope`. Registration claims health entries on `HealthBoard`; duplicate claims and reserved `sync:` names are refused. A SourceContext writes only through its registration's claimed entries, so reports after unregistration do nothing.
 
-Registry configuration methods include `kind`, `instances`, `instance`, `validate`, `validatePolicy`, `policyPart`, `channelAllowed`, `declarations`, `environments`, `find` and `scope`. `find` asks each kind that supports search.
+Registry configuration methods include `kind`, `instances`, `instance`, `validate`, `validatePolicy`, `policyPart`, `channelAllowed`, `declarations`, `environments`, `find`, `scope` and `change`. `find` asks each kind that supports search; `change` resolves the change lifecycle of a Thread's Source.
 
 Generic code accesses Source behavior through the registry. `send(message, commands)` calls the kind's Channel and returns `sent`, `gone` or `waiting` if the kind is not installed. `link` resolves its Channel link. `threadContext` pairs a kind's reader with its configuration, or returns nothing when the kind has no reader. Invalid stored configuration disables the instance.
 
@@ -361,11 +363,14 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/kind.ts` | The `SourceKind` protocol |
 | `src/sources/registry.ts` | `SourceRegistry` |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
+| `src/sources/change.ts` | The kind-neutral change lifecycle: which changes a Ticket follows (`changesOf`, `changeOf`), `claimChange` and `observeChange`, the closes they report to the Engine, and `endNotices`, the chat notice of a Ticket that ended merged or closed |
 | `src/sources/poll.ts` | What GitHub and Feishu polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
+| `src/sources/gitlab-api.ts` | The GitLab REST transport: the token file, `apiBase` and `projectId`, one call (`gitlab`) and paged reads (`gitlabPages`) that report the HTTP status on failure |
+| `src/sources/gitlab-trigger.ts` | GitLab notes, issues and merge requests as Triggers, their addresses, and a merge request as the generic change lifecycle's `Change` |
 | `src/sources/github.ts` | The GitHub kind and plugin entry, exported as `./github-watch`: a poll round of notifications, the pull requests of open Tickets with their CI, and subscribed Threads |
 | `src/sources/gitlab.ts` | The GitLab kind and plugin entry, exported as `./gitlab-watch`: pending to-dos and notes on subscribed Issues and MRs of one self-hosted project, and its Channel |
 | `src/sources/github-trigger.ts` | GitHub comments, reviews, Issue bodies and CI changes as Triggers, and GitHub addresses |
-| `src/sources/github-pull.ts` | The pull request rules: which pull requests a Ticket follows (`claimPull`, `observePull`), the closes it reports to the Engine, and `pullEndNotices`, the chat notice of a Ticket that ended merged or closed |
+| `src/sources/github-pull.ts` | GitHub pull requests as changes: their API shape, and the adapter (`githubChange`) the generic lifecycle in `change.ts` uses |
 | `src/sources/github-channel.ts` | The GitHub Channel: comments and review thread replies, `sent` or `gone` |
 | `src/sources/github-read.ts` | CI snapshots, repository reads, the `github/` resources, and `githubThreadContext`: an Issue's or pull request's conversation by page |
 | `src/sources/feishu.ts` | The Feishu kind and plugin entry, exported as `./feishu-watch` |
@@ -412,6 +417,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/gitlab.spec.ts` | The GitLab Source: configuration defaults, to-do and note triggers, polling and its cursor, the Channel, thread context and search |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
+| `tests/gitlab-api.spec.ts`, `tests/gitlab-trigger.spec.ts` | The GitLab transport (token file, paging, errors) and GitLab notes and merge requests as Triggers and changes |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |
 | `tests/assessment.spec.ts` | What the MasterAssessor keeps per Eval, and when it lets go |
 | `tests/background.spec.ts` | Waiting for a worker's shell jobs and subagents: an end that woke it, and a host that stops |

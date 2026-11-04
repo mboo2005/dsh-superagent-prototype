@@ -29,7 +29,8 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
-- [009 GitLab Source](docs/009-gitlab-source.md): a self-hosted GitLab project as a second, interchangeable Source
+- [009 GitLab support](docs/009-gitlab-support.md): what a GitLab deployment needs
+- [010 Multi-project support](docs/010-multi-project.md): one deployment for several GitLab projects
 
 ## Development
 
