@@ -44,7 +44,7 @@ The execution environment exposes `DSH_SUPERAGENT_GITLAB_URL`, `DSH_SUPERAGENT_G
 | --- | --- |
 | Pending to-dos | `GET todos?state=pending&per_page=100` |
 | Read an Issue or MR | `GET projects/<encoded project>/issues/<iid>` or `merge_requests/<iid>` |
-| Notes | `GET projects/<encoded project>/(issues\|merge_requests)/<iid>/notes?sort=asc&order_by=created_at&per_page=100` |
+| Notes | `GET projects/<encoded project>/(issues\|merge_requests)/<iid>/notes?sort=asc&order_by=created_at&per_page=100` for context; polling asks for `sort=desc` so the newest notes are never behind an old page |
 | Reply | `POST projects/<encoded project>/(issues\|merge_requests)/<iid>/notes` with `body` |
 
 All calls use the configured CLI and hostname, and only the Source's project. To-dos whose target belongs to another project are ignored.

@@ -104,6 +104,7 @@ describe('GitLab polling', () => {
       receive: receive as unknown as SourceContext['receive'],
       threads: { subscribed: () => [thread('issue:12', { gitlabNoteId: 2 })], patch: vi.fn(), describe: vi.fn(), get: vi.fn() } })
     await pollRound(ctx)
+    expect(run2.mock.calls.some(call => call[1][3]?.includes('sort=desc'))).toBe(true)
     expect(receive).toHaveBeenCalledTimes(1)
     expect(receive.mock.calls[0]![0]).toMatchObject({ text: 'new', threads: [{ source: 'gitlab', id: 'issue:12' }] })
   })
@@ -111,6 +112,8 @@ describe('GitLab polling', () => {
     const todos = [{ id: 1, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
       created_at: '2026-01-02T00:00:00.000Z' },
     { id: 2, author: { username: 'agent' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
+      created_at: '2026-01-02T00:00:00.000Z' },
+    { id: 3, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Commit', target: null,
       created_at: '2026-01-02T00:00:00.000Z' }]
     const run3 = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? JSON.stringify(todos) : '[]')
     const receive = vi.fn()

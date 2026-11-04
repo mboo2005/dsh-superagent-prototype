@@ -48,7 +48,7 @@ const NoteSchema = z.looseObject({
 })
 const TargetSchema = z.looseObject({ iid: z.number().nullish(), title: z.string().nullish(), web_url: z.string().nullish(), project_id: z.number().nullish() })
 const TodoSchema = z.looseObject({
-  id: z.number(), author: UserSchema, action_name: z.string(), target_type: z.string(), target: TargetSchema,
+  id: z.number(), author: UserSchema, action_name: z.string(), target_type: z.string(), target: TargetSchema.nullish(),
   body: z.string().nullish(), created_at: z.string(), target_url: z.string().nullish(),
 })
 const SubjectSchema = z.looseObject({
@@ -112,9 +112,10 @@ export function noteTrigger(note: GitlabNote, target: Place, config: GitlabConfi
 /** Builds the Trigger for one pending to-do, or undefined for a target type this Source does not watch. */
 export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | undefined {
   const kind: Kind | undefined = todo.target_type === 'MergeRequest' ? 'mr' : todo.target_type === 'Issue' ? 'issue' : undefined
-  const iid = todo.target.iid
+  const todoTarget = todo.target
+  const iid = todoTarget?.iid
   if (!kind || !iid) return undefined
-  const url = todo.target.web_url ?? todo.target_url ?? undefined
+  const url = todoTarget.web_url ?? todo.target_url ?? undefined
   // The to-do list of one account spans every project; this Source answers only for its own project.
   if (url && config.url && !url.startsWith(`${config.url.replace(/\/$/, '')}/${config.project}/`)) return undefined
   const target = place(kind, iid, config, url)
@@ -122,17 +123,17 @@ export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | u
     threads: [{ source: SOURCE, id: threadId(kind, iid) }], actor: { source: SOURCE, id: todo.author.username },
     human: todo.author.bot !== true && !sameName(todo.author.username, config.account),
     addressed: todo.action_name === 'assigned' || todo.action_name === 'directly_addressed' ? 'direct' : 'mention',
-    at: at(todo.created_at), text: todo.body?.trim() || todo.target.title || '',
-    channel: { source: SOURCE, thread: threadId(kind, iid), address: addressOf(target) }, url: todo.target_url ?? todo.target.web_url ?? '',
+    at: at(todo.created_at), text: todo.body?.trim() || todoTarget.title || '',
+    channel: { source: SOURCE, thread: threadId(kind, iid), address: addressOf(target) }, url: todo.target_url ?? todoTarget.web_url ?? '',
     meta: { kind, iid, project: config.project, todoId: todo.id, action: todo.action_name, author: todo.author.username } }
 }
 /** The subject URL of the issue or merge request a thread belongs to. */
 function subjectPath(target: Place): string {
   return `projects/${encoded(target.project)}/${segment(target.kind)}/${target.iid}`
 }
-/** Reads one page of notes, oldest first. */
-function notesPath(target: Place): string {
-  return `${subjectPath(target)}/notes?sort=asc&order_by=created_at&per_page=100`
+/** Reads one page of notes; polling asks for the newest first so a busy thread cannot hide new notes. */
+function notesPath(target: Place, order: 'asc' | 'desc' = 'asc'): string {
+  return `${subjectPath(target)}/notes?sort=${order}&order_by=created_at&per_page=100`
 }
 /** Converts one GitLab note into the normalized message an assessment reads. */
 function contextMessage(note: GitlabNote, target: Place): ContextMessage {
@@ -182,7 +183,8 @@ async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Threa
   const parsed = parseThread(thread.ref.id)
   if (!parsed) return
   const target = place(parsed.kind, parsed.iid, config, typeof thread.meta.url === 'string' ? thread.meta.url : undefined)
-  const notes = await api(ctx, config, notesPath(target), z.array(NoteSchema))
+  const notes = (await api(ctx, config, notesPath(target, 'desc'), z.array(NoteSchema)))
+    .sort((left, right) => left.id - right.id)
   const cursor = typeof thread.meta.gitlabNoteId === 'number' ? thread.meta.gitlabNoteId : undefined
   // A thread seen for the first time starts at its newest note: its earlier discussion is context, not new work.
   // Note ids grow within an instance, so a cursor on the newest id keeps notes written in the same second apart.
