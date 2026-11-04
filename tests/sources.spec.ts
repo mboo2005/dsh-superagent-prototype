@@ -1255,6 +1255,21 @@ describe('observing the GitHub repository', () => {
     expect(h.store.get('github-stream:issues')).toBeUndefined()
     h.store.close()
   })
+  it('keeps a PR opened in the agent account machine-written', async () => {
+    const h = host()
+    observe(h, { observeIssues: true, observePulls: true })
+    h.store.set('github-since', at(-24))
+    h.store.set('github-stream:issues', { since: at(0), started: { issues: at(0), pulls: at(0) } })
+    // A PR opened under the agent's account is the agent's own work, so it must not authorize anything as a person's request.
+    repository(h, { issues: [
+      { ...issue(5, { created_at: at(3), updated_at: at(3) }), pull_request: { url: 'x' } },
+      { ...issue(8, { created_at: at(4), updated_at: at(4), user: { login: 'agent-bot', type: 'User' }, body: 'agent PR body' }),
+        pull_request: { url: 'x' } },
+    ] })
+    await pollRound(h)
+    expect(h.receive.mock.calls.map(([trigger]) => [trigger.meta.number, trigger.human])).toEqual([[5, true], [8, false]])
+    h.store.close()
+  })
   it('takes in the repository\'s conversation and review comments, on the Issue or PR each is on', async () => {
     const h = host()
     observe(h, { observeComments: true })

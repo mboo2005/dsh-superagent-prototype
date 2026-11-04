@@ -233,7 +233,7 @@ async function readStream(ctx: SourceContext, round: Round, id: string, path: st
       const issue = IssueSchema.safeParse(item)
       const pr = issue.success && !!issue.data.pull_request
       if (!issue.success || !fresh(issue.data.created_at, pr ? 'pulls' : 'issues')) continue
-      await ctx.receive(pr ? pullTrigger(issue.data, login) : issueTrigger(issue.data, login))
+      await ctx.receive(pr ? pullTrigger(issue.data, login, sameName(issue.data.user.login, login)) : issueTrigger(issue.data, login))
       nameThread(ctx, issue.data.number, issue.data.title)
       continue
     }
