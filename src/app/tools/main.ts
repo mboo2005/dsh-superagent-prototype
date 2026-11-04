@@ -19,7 +19,7 @@ const RoutingNoteSchema = z.string().trim()
   .describe(`Optional routing background or explicit human constraint, at most ${NOTE_WORDS} words. Never add implementation instructions or replace the original source.`)
 export interface MainToolsHost {
   readonly context: Context
-  readonly engine: Pick<EngineForMainSession, 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'> & EngineForPeople
+  readonly engine: Pick<EngineForMainSession, 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note' | 'continueTicket'> & EngineForPeople
   readonly store: Pick<Store, 'tickets' | 'triggers' | 'threads' | 'atomic' | 'replyStatus' | 'settings'>
   readonly prompts: Pick<Prompts, 'preview' | 'save'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery' | 'modelRetry'>
@@ -163,6 +163,17 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
       description: 'Start a new assignment on an explicit human request to retry a ticket whose worker reported failed or blocked, or whose input was not delivered; the stalled one ends.',
       schema: z.object({ ticket_id: z.string() }).strict(),
       execute: async args => routed(host, { reason: 'Started a new assignment', ticketId: host.engine.retryTicket(args.ticket_id).id }),
+    }),
+    tool({
+      name: 'orchestrator_ticket_continue',
+      description: 'Continue a ticket whose ready result acceptance found unfinished, in the same worker Session and branch.',
+      schema: z.object({
+        ticket_id: z.string(),
+        remaining_work: z.string().trim().min(1).max(1000)
+          .describe('What the original request still needs; no plan or new requirements.'),
+      }).strict(),
+      execute: async args => routed(host, { reason: 'Continued with the remaining work',
+        ticketId: host.engine.continueTicket(args.ticket_id, args.remaining_work).id }),
     }),
     tool({
       name: 'orchestrator_ticket_request_status',

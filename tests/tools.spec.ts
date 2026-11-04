@@ -133,6 +133,28 @@ it('answers every routing tool in one shape: the decision it recorded, why, and 
   expect(TICKET_STATES).toContain(stopped.ticket.state)
 })
 
+it('continues a ticket whose ready report acceptance found unfinished, sending the remaining work to its worker', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'The regression is fixed.' })
+  expect(h.runtime.store.tickets.get(ticket.id)!.ended).toMatchObject({ outcome: 'completed' })
+  const run = (args: unknown) => h.runTool(h.runtime.masterId, 'orchestrator_ticket_continue', args)
+  expect(await run({ ticket_id: ticket.id, remaining_work: 'The request also asks for a test.' }))
+    .toEqual({ reason: 'Continued with the remaining work', ticket: expect.objectContaining({ ticket_id: ticket.id }) })
+  const resumed = h.runtime.store.tickets.get(ticket.id)!
+  expect(resumed.ended).toBeUndefined()
+  expect(resumed.assignments).toHaveLength(2)
+  expect(resumed.inputs.at(-1)).toMatchObject({ kind: 'text',
+    text: 'Acceptance found the original request unfinished. Continue on the existing branch and pull request, opening a new pull request from that branch if it merged, without redoing completed work; if only a person can finish it, report blocked. Remaining work: The request also asks for a test.' })
+  await h.runtime.idle()
+  expect(h.deliveries.mock.calls.map(([call]) => call.text).some(text =>
+    text.includes('Remaining work: The request also asks for a test.'))).toBe(true)
+  // Only remaining work may be named: a blank one, or one over 1,000 characters, is refused.
+  await expect(run({ ticket_id: ticket.id, remaining_work: '  ' })).rejects.toThrow()
+  await expect(run({ ticket_id: ticket.id, remaining_work: 'x'.repeat(1001) })).rejects.toThrow()
+  // A ticket with no ready report cannot be continued, and the refusal is a person's error, not a crash.
+  await expect(run({ ticket_id: ticket.id, remaining_work: 'Again.' })).rejects.toThrow('Only a ticket whose latest report is ready')
+})
+
 it('routes several triggers in one call, in order, and answers a refused or failed item without undoing the others', async () => {
   const { ticket } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
   const thanks = feishu('2', '@bot 谢谢'), request = feishu('3', '@bot 另一个问题'), other = feishu('4', '@bot 顺便看看这个'), more = feishu('6', '@bot 还有这个')

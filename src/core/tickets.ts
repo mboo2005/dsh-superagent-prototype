@@ -179,6 +179,37 @@ export class Tickets extends EnginePart {
     return ticket
   }
   /**
+   * Continue a ticket whose latest Report is `ready` because acceptance found the original request unfinished: a new
+   * Assignment under the same Mandate takes `work`, what remains, in the same Executor Session and directory, on its branch
+   * and pull request, or a new pull request from that branch once it merged. A ticket the `ready` Report ended resumes; one
+   * a person stopped stays ended. Refuses while an Input waits or was taken at or after that Report, since the Assignment
+   * is busy with newer work.
+   * @throws UserError when the ticket is unknown or not continuable.
+   */
+  continueTicket(ticketId: string, work: string): Ticket {
+    const ticket = this.require(ticketId)
+    const latest = latestAssignment(ticket)
+    const report = latest?.report
+    if (ticket.ended?.by === 'human') throw new UserError('ticketStopped')
+    if (!latest || report?.state !== 'ready' || ticket.undelivered.length || (latest.deliveredAt && latest.deliveredAt >= report.at)) throw new UserError('notContinuable')
+    if (ticket.ended && !this.options.policy().revalidate(ticket.mandate)) throw new UserError('mandateRevoked')
+    const at = this.now()
+    const ended = !!ticket.ended
+    if (ended) delete ticket.ended
+    else {
+      this.endAssignment(ticket, latest, 'continued')
+      this.requeueUntaken(ticket, latest)
+    }
+    const assignment = this.newAssignment(ticket)
+    const text = `Acceptance found the original request unfinished. Continue on the existing branch and pull request, opening a new pull request from that branch if it merged, without redoing completed work; if only a person can finish it, report blocked. Remaining work: ${work}`
+    const input: TicketInput = { id: key('input', ticket.id, 'continued', assignment.id), kind: 'text', text, at }
+    ticket.inputs.push(input); ticket.undelivered.push(input.id); ticket.updatedAt = at
+    this.repo.tickets.save(ticket)
+    if (!ended) this.options.executor.stop(ticket, latest, 'continued')
+    this.options.executor.start(ticket, assignment)
+    return ticket
+  }
+  /**
    * Drops a ticket's Subscription to a Thread its worker found unrelated, and hands back, with `reason`, the person's messages there that the ticket decides.
    * @throws UserError when the ticket is unknown, or `thread` is an origin thread, a bound `follows` thread, or not subscribed.
    */
