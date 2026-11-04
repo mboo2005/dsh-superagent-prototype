@@ -27,21 +27,25 @@ export interface SourceContextDeps {
 }
 
 /**
- * Builds the context for one Source kind. Health reports are restricted to entries declared by the kind and
- * bound to the active registration, becoming no-ops once unregistered.
+ * Builds the context for one Source instance. Health reports are restricted to entries declared by the kind and
+ * bound to the active registration, becoming no-ops once unregistered; a project instance reports into its own
+ * per-instance entries.
+ * --- @ty.aicoding@ ---
  */
-export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }): SourceContext {
+export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }, instanceId?: string): SourceContext {
   const { store } = deps
-  const health = deps.sources.healthEntries(kind.health)
+  const instance = instanceId ?? kind.kind
+  const health = deps.sources.healthFor(kind, instance)
   return {
+    instance,
     get deployment() { return deps.deployment },
     commands: deps.commands,
     ready: deps.ready,
     configured: () => deps.configured(),
     get problem() { return [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },
     config: <C extends Record<string, unknown>>(id: string) => {
-      const instance = deps.sources.instance<C>(id)
-      return instance?.enabled ? instance.config : undefined
+      const resolved = deps.sources.instance<C>(id)
+      return resolved?.enabled ? resolved.config : undefined
     },
     receive: trigger => deps.receive(trigger),
     atomic: work => store.atomic(work),
@@ -68,5 +72,6 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; h
       if (!kind.health.includes(entry)) throw new Error(`The ${kind.kind} Source has no health entry ${entry}`)
       health.get(entry)?.set(value)
     },
+    change: () => deps.sources.change(instance, deps.deployment),
   }
 }

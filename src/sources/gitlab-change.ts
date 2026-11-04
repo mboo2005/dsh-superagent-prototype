@@ -4,7 +4,7 @@
  */
 import { z } from 'zod'
 import type { ThreadFact, Ticket } from '../core/index.ts'
-import type { Deployment } from '../deployment.ts'
+import type { Deployment, GitlabProject } from '../deployment.ts'
 import type { SourceContext } from './host.ts'
 import { changesOf, changeThread, claimChange, observeChange,
   type Change, type ChangeHost } from './change.ts'
@@ -35,8 +35,16 @@ export type GitlabMr = z.infer<typeof MrSchema>
 export async function readMr(ctx: SourceContext, deployment: Pick<Deployment, 'gitlab'>, iid: number, signal?: AbortSignal): Promise<GitlabMr> {
   const gitlab = deployment.gitlab
   if (!gitlab) throw new Error('This installation has no GitLab project, so it cannot read a merge request')
-  const path = `projects/${encodeURIComponent(gitlab.project)}/merge_requests/${iid}`
-  const raw = await ctx.commands.withSignal(signal).run(gitlab.cli, ['api', '--hostname', gitlab.host, path])
+  return readMrIn(ctx, gitlab, iid, signal)
+}
+/**
+ * Reads one merge request of `project` through the deployment's glab CLI.
+ * @throws when the API call fails.
+ * --- @ty.aicoding@ ---
+ */
+export async function readMrIn(ctx: SourceContext, project: GitlabProject, iid: number, signal?: AbortSignal): Promise<GitlabMr> {
+  const path = `projects/${encodeURIComponent(project.project)}/merge_requests/${iid}`
+  const raw = await ctx.commands.withSignal(signal).run(project.cli, ['api', '--hostname', project.host, path])
   return MrSchema.parse(JSON.parse(raw))
 }
 /**
@@ -63,9 +71,9 @@ const AUTO_MERGE_ON: ThreadFact = { label: { zh: '自动合并', en: 'Auto-merge
  * The Thread key of one merge request, and the IID a Thread key names; each change Source owns this mapping.
  * --- @ty.aicoding@ ---
  */
-const mrThread = (iid: number): string => `${SOURCE}:mr:${iid}`
-const mrNumber = (thread: string): number | undefined => {
-  const match = new RegExp(`^${SOURCE}:mr:(\\d+)$`).exec(thread)
+const mrThread = (source: string, iid: number): string => `${source}:mr:${iid}`
+const mrNumber = (source: string, thread: string): number | undefined => {
+  const match = new RegExp(`^${source}:mr:(\\d+)$`).exec(thread)
   return match ? Number(match[1]) : undefined
 }
 /**
@@ -73,22 +81,22 @@ const mrNumber = (thread: string): number | undefined => {
  * GitLab project (in which case a worker can neither read nor claim a merge request).
  * --- @ty.aicoding@ ---
  */
-export const gitlabChange = (deployment: Pick<Deployment, 'gitlab'>): ChangeHost | undefined => {
-  const gitlab = deployment.gitlab
-  if (!gitlab) return undefined
+export const gitlabChange = (deployment: Pick<Deployment, 'gitlab'>, project = deployment.gitlab, source = SOURCE): ChangeHost | undefined => {
+  if (!project) return undefined
   return {
-    source: SOURCE, term: 'MR', account: gitlab.account, repository: gitlab.project,
+    source, term: 'MR', account: project.account, repository: project.project,
     facts: change => ({ autoMerge: !(change.state === 'closed' || change.merged) && change.autoMerge ? AUTO_MERGE_ON : null }),
-    link: iid => `${gitlab.url}/${gitlab.project}/-/merge_requests/${iid}`,
-    thread: mrThread, id: mrNumber,
-    read: (ctx, iid, signal) => readMr(ctx, deployment, iid, signal).then(mr => asChange(mr, gitlab.project)),
+    link: iid => `${project.url}/${project.project}/-/merge_requests/${iid}`,
+    thread: iid => mrThread(source, iid), id: thread => mrNumber(source, thread),
+    read: (ctx, iid, signal) => readMrIn(ctx, project, iid, signal).then(mr => asChange(mr, project.project)),
   }
 }
 /**
  * The merge requests a ticket follows, oldest first; `open` keeps the ones not yet closed.
  * --- @ty.aicoding@ ---
  */
-export const mrsOf = (ticket: Pick<Ticket, 'follows'>, open = false): number[] => changesOf({ id: mrNumber }, ticket, open)
+export const mrsOf = (ticket: Pick<Ticket, 'follows'>, open = false): number[] =>
+  changesOf({ id: (thread: string) => /^[^:]+:mr:(\d+)$/.exec(thread)?.[1] ? Number(/^[^:]+:mr:(\d+)$/.exec(thread)![1]) : undefined }, ticket, open)
 /**
  * The newest merge request a ticket follows, if any.
  * --- @ty.aicoding@ ---
@@ -99,7 +107,7 @@ export const mrOf = (ticket: Pick<Ticket, 'follows'>): number | undefined => mrs
  * --- @ty.aicoding@ ---
  */
 export const claimMr = (ctx: SourceContext, ticketId: string, mr: GitlabMr): string | undefined => {
-  const host = gitlabChange(ctx.deployment)
+  const host = ctx.change?.() ?? (ctx.deployment ? gitlabChange(ctx.deployment) : undefined)
   return host ? claimChange(ctx, host, ticketId, asChange(mr, host.repository)) : 'This installation has no GitLab project'
 }
 /**
@@ -109,10 +117,9 @@ export const claimMr = (ctx: SourceContext, ticketId: string, mr: GitlabMr): str
  */
 export async function pollTicketMrs(ctx: SourceContext): Promise<void> {
   // A Source the tests drive without a deployment has no merge requests to observe.
-  if (!ctx.deployment?.gitlab) return
-  const host = gitlabChange(ctx.deployment)
+  const host = ctx.change?.() ?? (ctx.deployment ? gitlabChange(ctx.deployment) : undefined)
   if (!host) return
-  const iids = [...new Set(ctx.tickets.open().flatMap(ticket => mrsOf(ticket, true)))]
+  const iids = [...new Set(ctx.tickets.open().flatMap(ticket => changesOf(host, ticket, true)))]
   for (const iid of iids) {
     try {
       await observeChange(ctx, host, await host.read(ctx, iid))

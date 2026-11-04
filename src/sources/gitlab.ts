@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { key, type Thread, type Trigger } from '../core/index.ts'
 import { CliError } from '../infra/commands.ts'
+import { gitlabProject } from '../deployment.ts'
 import { sameName } from '../infra/text.ts'
 import { health, sourceContext, type Health, type SourceContext } from './host.ts'
 import { gitlabChange, pollTicketMrs } from './gitlab-change.ts'
@@ -60,7 +61,7 @@ export type GitlabTodo = z.infer<typeof TodoSchema>
 
 type Kind = 'issue' | 'mr'
 /** Where a GitLab thread lives: enough to read it and to post a reply without the stored configuration. */
-interface Place { kind: Kind; iid: number; project: string; cli: string; host: string; url?: string | undefined }
+interface Place { kind: Kind; iid: number; project: string; cli: string; host: string; source?: string | undefined; url?: string | undefined }
 
 const hostOf = (url: string): string => {
   try { return new URL(url).host } catch { return '' }
@@ -68,8 +69,8 @@ const hostOf = (url: string): string => {
 const encoded = (project: string): string => encodeURIComponent(project)
 const segment = (kind: Kind): string => kind === 'mr' ? 'merge_requests' : 'issues'
 const threadId = (kind: Kind, iid: number): string => `${kind}:${iid}`
-const place = (kind: Kind, iid: number, config: GitlabConfig, url?: string | undefined): Place =>
-  ({ kind, iid, project: config.project, cli: config.cli, host: hostOf(config.url), ...url ? { url } : {} })
+const place = (kind: Kind, iid: number, config: GitlabConfig, url?: string | undefined, source = SOURCE): Place =>
+  ({ kind, iid, project: config.project, cli: config.cli, host: hostOf(config.url), source, ...url ? { url } : {} })
 /** The write-only channel address of a GitLab thread; `cli` and `host` let a retained reply find its instance later. */
 function addressOf(target: Place): Record<string, string> {
   return { kind: target.kind, iid: String(target.iid), project: target.project, cli: target.cli, host: target.host,
@@ -103,19 +104,20 @@ async function apiAt<T>(commands: SourceContext['commands'], target: Place, path
 export function noteTrigger(note: GitlabNote, target: Place, config: GitlabConfig): Trigger {
   const body = note.body ?? ''
   const edited = note.updated_at ?? note.created_at
-  return { id: key('gitlab-note', target.project, target.kind, String(target.iid), String(note.id), edited), source: SOURCE,
-    threads: [{ source: SOURCE, id: threadId(target.kind, target.iid) }],
-    actor: { source: SOURCE, id: note.author.username },
+  const source = target.source ?? SOURCE
+  return { id: key('gitlab-note', target.project, target.kind, String(target.iid), String(note.id), edited), source,
+    threads: [{ source, id: threadId(target.kind, target.iid) }],
+    actor: { source, id: note.author.username },
     human: note.author.bot !== true && !sameName(note.author.username, config.account),
     ...mentioned(body, config.account) ? { addressed: 'mention' as const } : {},
     at: at(edited), text: body,
-    channel: { source: SOURCE, thread: threadId(target.kind, target.iid), address: addressOf(target) },
+    channel: { source, thread: threadId(target.kind, target.iid), address: addressOf(target) },
     url: note.web_url ?? target.url ?? '',
     meta: { kind: target.kind, iid: target.iid, project: target.project, noteId: note.id, author: note.author.username,
       ...target.kind === 'mr' ? { isPr: true as const, number: target.iid } : {} } }
 }
 /** Builds the Trigger for one pending to-do, or undefined for a target type this Source does not watch. */
-export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | undefined {
+export function todoTrigger(todo: GitlabTodo, config: GitlabConfig, source = SOURCE): Trigger | undefined {
   if (!['assigned', 'mentioned', 'directly_addressed'].includes(todo.action_name)) return undefined
   const kind: Kind | undefined = todo.target_type === 'MergeRequest' ? 'mr' : todo.target_type === 'Issue' ? 'issue' : undefined
   const todoTarget = todo.target
@@ -124,13 +126,13 @@ export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | u
   const url = todoTarget.web_url ?? todo.target_url ?? undefined
   // The to-do list of one account spans every project; without a URL the project is unknown, so never answer it.
   if (!url || !config.url || !url.startsWith(`${config.url.replace(/\/$/, '')}/${config.project}/`)) return undefined
-  const target = place(kind, iid, config, url)
-  return { id: key('gitlab-todo', config.project, kind, String(iid), String(todo.id)), source: SOURCE,
-    threads: [{ source: SOURCE, id: threadId(kind, iid) }], actor: { source: SOURCE, id: todo.author.username },
+  const target = place(kind, iid, config, url, source)
+  return { id: key('gitlab-todo', config.project, kind, String(iid), String(todo.id)), source,
+    threads: [{ source, id: threadId(kind, iid) }], actor: { source, id: todo.author.username },
     human: todo.author.bot !== true && !sameName(todo.author.username, config.account),
     addressed: todo.action_name === 'assigned' || todo.action_name === 'directly_addressed' ? 'direct' : 'mention',
     at: at(todo.created_at), text: todo.body?.trim() || todoTarget.title || '',
-    channel: { source: SOURCE, thread: threadId(kind, iid), address: addressOf(target) }, url: todo.target_url ?? todoTarget.web_url ?? '',
+    channel: { source, thread: threadId(kind, iid), address: addressOf(target) }, url: todo.target_url ?? todoTarget.web_url ?? '',
     meta: { kind, iid, project: config.project, todoId: todo.id, action: todo.action_name, author: todo.author.username,
       ...kind === 'mr' ? { isPr: true as const, number: iid } : {} } }
 }
@@ -164,11 +166,12 @@ export const gitlabThreadContext: ThreadContext<GitlabConfig> = {
   },
 }
 /** Posts a note with an embedded HTML marker so a retry does not duplicate the reply. */
-export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message: { id: string; channel: { address: Record<string, string> }; text: string }): Promise<'sent' | 'gone'> {
+export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message: { id: string; channel: { source?: string; address: Record<string, string> }; text: string }): Promise<'sent' | 'gone'> {
   const { kind, iid, project, cli, host: instance } = message.channel.address
   const number = Number(iid)
   if ((kind !== 'issue' && kind !== 'mr') || !Number.isInteger(number) || number <= 0 || !project || !cli || !instance) return 'gone'
-  const target: Place = { kind: kind === 'mr' ? 'mr' : 'issue', iid: number, project, cli, host: instance, url: message.channel.address.url }
+  const target: Place = { kind: kind === 'mr' ? 'mr' : 'issue', iid: number, project, cli, host: instance,
+    source: message.channel.source ?? SOURCE, url: message.channel.address.url }
   try {
     const marker = `<!-- dsh-superagent:${message.id} -->`
     const existing = await apiAt(host.commands, target, notesPath(target, 'desc'), z.array(NoteSchema))
@@ -190,7 +193,7 @@ export function gitlabLink(address: Record<string, string>, _links: ChannelLinks
 async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Thread): Promise<void> {
   const parsed = parseThread(thread.ref.id)
   if (!parsed) return
-  const target = place(parsed.kind, parsed.iid, config, typeof thread.meta.url === 'string' ? thread.meta.url : undefined)
+  const target = place(parsed.kind, parsed.iid, config, typeof thread.meta.url === 'string' ? thread.meta.url : undefined, ctx.instance)
   const notes = (await api(ctx, config, notesPath(target, 'desc'), z.array(NoteSchema)))
     .sort((left, right) => left.id - right.id)
   const cursor = typeof thread.meta.gitlabNoteId === 'number' ? thread.meta.gitlabNoteId : undefined
@@ -212,19 +215,19 @@ async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Threa
 }
 /** One polling round: pending to-dos, notes on every subscribed GitLab thread, then the merge requests of open tickets. */
 export async function pollRound(ctx: SourceContext): Promise<number> {
-  const config = ctx.config<GitlabConfig>(SOURCE)
+  const config = ctx.config<GitlabConfig>(ctx.instance)
   if (!config) return 60
   if (!usable(config)) return 60
   if (config.observeTodos) {
     const todos = await api(ctx, config, 'todos?state=pending&per_page=100', z.array(TodoSchema))
     for (const todo of todos) {
       if (sameName(todo.author.username, config.account)) continue
-      const trigger = todoTrigger(todo, config)
+      const trigger = todoTrigger(todo, config, ctx.instance)
       if (trigger) await ctx.receive(trigger)
     }
   }
   if (config.observeNotes) {
-    for (const thread of ctx.threads.subscribed(SOURCE)) await pollNotes(ctx, config, thread)
+    for (const thread of ctx.threads.subscribed(ctx.instance)) await pollNotes(ctx, config, thread)
   }
   await pollTicketMrs(ctx)
   return config.pollSeconds
@@ -260,7 +263,7 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
   channel: { allowed: (address, config) => !!address.kind && !!address.iid && address.project?.toLowerCase() === config.project.toLowerCase(),
     send: sendGitlab, link: gitlabLink },
   threadContext: gitlabThreadContext,
-  change: deployment => gitlabChange(deployment),
+  change: (deployment, config, instance) => gitlabChange(deployment, config.url && config.project ? gitlabProject(config) : undefined, instance),
   find: query => {
     const text = query.trim()
     const url = /gitlab[^/]*\/.+\/(?:-\/)?(issues|merge_requests)\/(\d+)/.exec(text)
@@ -287,7 +290,7 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
       { key: 'DSH_SUPERAGENT_GITLAB_IID', description: { zh: '接下工单的 Issue 或 MR 的 IID；工单不是从 GitLab 来的时为空', en: 'IID of the Issue or MR that started the ticket; empty when the ticket did not start on GitLab' } },
     ],
     values: ({ config, trigger }) => {
-      const iid = trigger?.threads[0]?.source === SOURCE ? trigger.meta.iid : undefined
+      const iid = trigger && trigger.threads[0]?.source === trigger.source ? trigger.meta.iid : undefined
       return { DSH_SUPERAGENT_GITLAB_URL: config.url, DSH_SUPERAGENT_GITLAB_HOST: config.url ? hostOf(config.url) : '',
         DSH_SUPERAGENT_GITLAB_PROJECT: config.project, DSH_SUPERAGENT_GITLAB_ACCOUNT: config.account,
         DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL: config.email || (config.url ? `${config.account}@users.noreply.${hostOf(config.url)}` : ''),
@@ -302,11 +305,32 @@ export const inject = ['orchestrator']
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.orchestrator.sources.register(gitlabKind), 'gitlab: source kind')
   ctx.effect(() => {
-    const source = sourceContext(ctx.orchestrator, gitlabKind)
-    const controller = new AbortController()
-    const running = watch(source, controller.signal)
-      .catch((error: unknown) => { source.report(SOURCE, { state: 'error', detail: String(error) }) })
-    return async () => { controller.abort(); await running }
+    // One polling loop per enabled GitLab project instance, re-read as settings change so adding or removing a project
+    // starts or stops exactly its loop; every loop reports into its own per-instance health entry.
+    const loops = new Map<string, { run: AbortController; done: Promise<void> }>()
+    const stopped: Promise<void>[] = []
+    const sync = () => {
+      const wanted = ctx.orchestrator.sources.instances()
+        .filter(instance => instance.kind === SOURCE && instance.installed && instance.enabled)
+        .map(instance => instance.id)
+      for (const [id, loop] of loops) if (!wanted.includes(id)) { loop.run.abort(); stopped.push(loop.done); loops.delete(id) }
+      for (const id of wanted) {
+        if (loops.has(id)) continue
+        const source = sourceContext(ctx.orchestrator, gitlabKind, id)
+        const run = new AbortController()
+        const done = watch(source, run.signal)
+          .catch((error: unknown) => { source.report(SOURCE, { state: 'error', detail: String(error) }) })
+        loops.set(id, { run, done })
+      }
+    }
+    sync()
+    const timer = setInterval(sync, 5_000)
+    timer.unref?.()
+    return async () => {
+      clearInterval(timer)
+      for (const loop of loops.values()) loop.run.abort()
+      await Promise.all([...stopped, ...[...loops.values()].map(loop => loop.done)])
+    }
   })
 }
 /** Reports a failed poll once the configured threshold is reached, so one interruption stays quiet. */
@@ -319,7 +343,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
   if (!ctx.configured()) { ctx.report(SOURCE, health('paused', 'setupPending')); return }
   while (!signal.aborted) {
-    const config = ctx.config<GitlabConfig>(SOURCE)
+    const config = ctx.config<GitlabConfig>(ctx.instance)
     try {
       if (!config) ctx.report(SOURCE, health('paused', 'sourceOff'))
       else if (!usable(config)) ctx.report(SOURCE, health('paused', 'setupPending'))

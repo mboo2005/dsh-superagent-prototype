@@ -3,6 +3,7 @@ import type { ChannelRef, ReceiveResult, OutboundMessage, Thread, ThreadFact, Th
 import type { Commands } from '../infra/commands.ts'
 import type { Deployment } from '../deployment.ts'
 import type { SourceRegistry } from './registry.ts'
+import type { ChangeHost } from './change.ts'
 import type { SetupProblem } from '../setup.ts'
 import type { Family, Key } from '../kv.ts'
 import { fill } from '../infra/text.ts'
@@ -22,13 +23,15 @@ export function health(state: Health['state'], code: HealthCode, values: Record<
 }
 export interface SourceHost {
   readonly sources: SourceRegistry
-  /** Returns the context for one Source kind; its `report` writes only the health entries declared by the kind. */
-  context(kind: { kind: string; health: readonly string[] }): SourceContext
+  /** Returns the context for one Source instance; its `report` writes only the health entries declared by the kind. */
+  context(kind: { kind: string; health: readonly string[] }, instance?: string): SourceContext
 }
 /** Display label, URL, and facts (`null` removes a fact) that a Source publishes on a Thread. */
 export interface ThreadDescription { label?: string; url?: string; facts?: Record<string, ThreadFact | null> }
 /** Application capabilities exposed to a Source kind for reading state, ingesting triggers, managing threads/tickets, and reporting health. */
 export interface SourceContext {
+  /** The Source instance this context serves: a kind id, or a project instance id. */
+  instance: string
   readonly deployment: Deployment
   readonly commands: Commands
   readonly ready: Promise<void>
@@ -63,5 +66,8 @@ export interface SourceContext {
   notify(message: OutboundMessage): void
   /** Reports the state of one of this kind's declared health entries; throws for undeclared entry names. */
   report(entry: string, health: Health): void
+  /** The change lifecycle of this instance, over its own project; undefined when the kind has none. */
+  change(): ChangeHost | undefined
 }
-export const sourceContext = (host: SourceHost, kind: { kind: string; health: readonly string[] }): SourceContext => host.context(kind)
+export const sourceContext = (host: SourceHost, kind: { kind: string; health: readonly string[] }, instance?: string): SourceContext =>
+  host.context(kind, instance)

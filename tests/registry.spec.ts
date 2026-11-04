@@ -53,6 +53,26 @@ describe('Source registry', () => {
     expect(() => sources.validate('probe-six', { enabled: true, kind: 'missing', config: {} })).toThrow('not installed')
     expect(sources.policyPart('probe-two')).toBeUndefined()
   })
+  it('passes the ticket\'s own instance to the change hook and its environment, not the kind\'s project', () => {
+    const change = vi.fn(() => undefined)
+    const settings = SettingsSchema.parse({ sources: {
+      probe: { enabled: true, config: { interval: 7 } },
+      'probe-two': { enabled: true, kind: 'probe', config: { interval: 9 } },
+    } })
+    const sources = new SourceRegistry(() => settings)
+    sources.register({ ...probe, environment: { variables: [], values: () => ({}) }, change })
+    sources.register(githubKind)
+    const deployment = testDeployment()
+    expect(sources.change('probe-two', deployment)).toBeUndefined()
+    expect(change).toHaveBeenCalledWith(deployment, { interval: 9 }, 'probe-two')
+    const probes = (source?: string) => sources.environments(settings, source)
+      .filter(item => item.kind.kind === 'probe').map(item => item.config)
+    expect(probes()).toEqual([{ interval: 7 }, { interval: 9 }])
+    expect(probes('probe-two')).toEqual([{ interval: 9 }])
+    expect(probes('probe')).toEqual([{ interval: 7 }])
+    // A kind the ticket does not come from still contributes its own instance, never another project of it.
+    expect(sources.environments(settings, 'probe-two').map(item => item.kind.kind)).toEqual(['github', 'probe'])
+  })
   it('validates submitted instances with the kind schema and refuses kinds that are not installed', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({}))
     sources.register(probe)
@@ -119,6 +139,25 @@ describe('Source registry', () => {
     expect(board.all.github).toEqual({ state: 'starting', detail: '' })
     context(githubKind).report('github', { state: 'ready', detail: 'again' })
     expect(board.all.github).toEqual({ state: 'ready', detail: 'again' })
+  })
+  it('reports a project instance into its own health entry and releases it with the kind', () => {
+    const board = new HealthBoard()
+    const sources = new SourceRegistry(() => SettingsSchema.parse({}), board)
+    const unregister = sources.register({ ...probe, health: ['probe'] })
+    const deps = { sources } as unknown as SourceContextDeps
+    const project = sourceContextOf(deps, { kind: 'probe', health: ['probe'] }, 'probe-two')
+    project.report('probe', { state: 'ready', detail: 'project ok' })
+    expect(board.all['probe:probe-two']).toEqual({ state: 'ready', detail: 'project ok' })
+    // The kind instance's own entry is untouched, and the project context still reports under the kind's names.
+    expect(board.all.probe).toEqual({ state: 'starting', detail: '' })
+    expect(() => project.report('other', { state: 'ready', detail: '' })).toThrow('has no health entry other')
+    sourceContextOf(deps, { kind: 'probe', health: ['probe'] }, 'probe').report('probe', { state: 'paused', detail: 'kind' })
+    expect(board.all.probe).toEqual({ state: 'paused', detail: 'kind' })
+    // Unregistering the kind gives up its project entries too; a late report writes nothing.
+    unregister()
+    expect(board.all['probe:probe-two']).toBeUndefined()
+    project.report('probe', { state: 'error', detail: 'late' })
+    expect(board.all['probe:probe-two']).toBeUndefined()
   })
   it('names the Trigger whose message a Trigger\'s message answers, where its kind can', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({}))

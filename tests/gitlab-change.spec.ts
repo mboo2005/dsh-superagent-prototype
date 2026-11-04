@@ -54,6 +54,15 @@ describe('GitLab merge requests as changes', () => {
     expect(host.facts!(asChange(mr({ state: 'merged', merged_at: '2026-02-01T00:00:00.000Z' }), 'group/project'))).toEqual({ autoMerge: null })
     expect(gitlabChange({ gitlab: undefined })).toBeUndefined()
   })
+  it('builds a project instance\'s change host over its own configuration and thread prefix', () => {
+    const two = { ...project, project: 'group/two' }
+    const host = gitlabChange({ gitlab: project }, two, 'gitlab-two')!
+    expect(host).toMatchObject({ source: 'gitlab-two', repository: 'group/two' })
+    expect(host.thread(5)).toBe('gitlab-two:mr:5')
+    expect(host.id('gitlab-two:mr:5')).toBe(5)
+    expect(host.id('gitlab:mr:5')).toBeUndefined()
+    expect(host.link(5)).toBe('https://gitlab.example.com/group/two/-/merge_requests/5')
+  })
   it('reads one merge request through the project CLI and refuses without a GitLab project', async () => {
     const { ctx, run } = context()
     await expect(readMr(ctx, { gitlab: project }, 5)).resolves.toMatchObject({ iid: 5 })

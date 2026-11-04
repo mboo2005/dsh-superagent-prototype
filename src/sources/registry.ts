@@ -15,6 +15,8 @@ import type { ChannelLink, ChannelLinks, SourceInstance, SourceKind, TriggerCont
 export class SourceRegistry implements SourceScope {
   private readonly kinds = new Map<string, SourceKind>()
   private readonly health = new Map<string, HealthEntry>()
+  /** Health entries claimed for project instances, keyed by board name and remembering the kind that owns them. */
+  private readonly projectHealth = new Map<string, { entry: HealthEntry; kind: string }>()
   constructor(private readonly settings: () => Settings, private readonly board: Pick<HealthBoard, 'claim'> = new HealthBoard(),
     private readonly registered: (kind: SourceKind) => () => void = () => () => {}) {}
 
@@ -25,7 +27,10 @@ export class SourceRegistry implements SourceScope {
     const synced = kind.health.find(name => name.startsWith('sync:'))
     if (synced) throw refused(synced)
     const entries = new Map<string, HealthEntry>()
-    const release = () => { for (const [name, entry] of entries) { entry.release(); this.health.delete(name) } }
+    const release = () => {
+      for (const [name, entry] of entries) { entry.release(); this.health.delete(name) }
+      for (const [name, claimed] of this.projectHealth) if (claimed.kind === kind.kind) { claimed.entry.release(); this.projectHealth.delete(name) }
+    }
     for (const name of kind.health) {
       try { entries.set(name, this.board.claim(name, { state: 'starting', detail: '' })) }
       catch { release(); throw refused(name) }
@@ -41,6 +46,24 @@ export class SourceRegistry implements SourceScope {
    */
   healthEntries(names: readonly string[]): Map<string, HealthEntry> {
     return new Map(names.flatMap(name => { const entry = this.health.get(name); return entry ? [[name, entry] as const] : [] }))
+  }
+  /**
+   * The health entries one instance reports through: the kind's own entries for the kind instance, or entries claimed
+   * per instance (`<entry>:<instanceId>`) for a project instance, so each project has its own board state.
+   * --- @ty.aicoding@ ---
+   */
+  healthFor(kind: { kind: string; health: readonly string[] }, instanceId?: string): Map<string, HealthEntry> {
+    if (!instanceId || instanceId === kind.kind) return this.healthEntries(kind.health)
+    return new Map(kind.health.flatMap(name => {
+      const board = `${name}:${instanceId}`
+      let claimed = this.projectHealth.get(board)
+      if (!claimed) {
+        try { claimed = { entry: this.board.claim(board, { state: 'starting', detail: '' }), kind: kind.kind } }
+        catch { return [] }
+        this.projectHealth.set(board, claimed)
+      }
+      return [[name, claimed.entry] as const]
+    }))
   }
   kind(id: string): SourceKind | undefined { return this.kinds.get(id) }
   /**
@@ -108,10 +131,21 @@ export class SourceRegistry implements SourceScope {
   declarations(): { kind: string; variables: readonly VariableSpec[] }[] {
     return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => kind.environment ? [{ kind: kind.kind, variables: kind.environment.variables }] : [])
   }
-  environments(settings = this.settings()) {
+  /**
+   * Environment inputs of enabled instances. With `source`, each kind contributes the one instance that source names,
+   * or its own instance when the source belongs to another kind, so a worker gets its project's variables alone.
+   * --- @ty.aicoding@ ---
+   */
+  environments(settings = this.settings(), source?: string) {
+    const target = source ? this.resolve(source, settings) : undefined
     return this.instances(settings).flatMap(instance => {
       const kind = this.kinds.get(instance.kind)
-      return kind?.environment && instance.enabled ? [{ kind, environment: kind.environment, config: instance.config }] : []
+      if (!kind?.environment || !instance.enabled) return []
+      if (target) {
+        const wanted = target.instance.kind === instance.kind ? target.instance.id : instance.kind
+        if (instance.id !== wanted) return []
+      }
+      return [{ kind, environment: kind.environment, config: instance.config }]
     })
   }
   /**
@@ -137,7 +171,8 @@ export class SourceRegistry implements SourceScope {
    * --- @ty.aicoding@ ---
    */
   change(source: string, deployment: Deployment): ChangeHost | undefined {
-    return this.resolve(source)?.kind.change?.(deployment)
+    const resolved = this.resolve(source)
+    return resolved?.kind.change?.(deployment, resolved.instance.config, resolved.instance.id)
   }
   threadContext(trigger: Trigger, settings = this.settings()): TriggerContext | undefined {
     const resolved = this.resolve(trigger.source, settings)
