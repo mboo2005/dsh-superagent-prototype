@@ -819,6 +819,74 @@ describe('worker reports', () => {
     expect(outcome('failed', false)).toMatchObject({ attention: { question: 'Merge it?' } })
     expect(outcome('failed', false)).not.toHaveProperty('ended')
   })
+  it('continues a ready result acceptance found unfinished, whether the ticket ended or still follows an open pull request', () => {
+    const h = harness()
+    const ticketId = accepted(h).ticketId!
+    const first = h.repo.tickets.get(ticketId)!.assignments[0]!
+    h.engine.report(ticketId, { state: 'ready', summary: 'README section added' })
+    expect(h.repo.tickets.get(ticketId)!.ended).toMatchObject({ outcome: 'completed' })
+    h.tick(1)
+    const resumed = h.engine.continueTicket(ticketId, 'Document the GitLab source as the request asked.')
+    expect(resumed.ended).toBeUndefined()
+    expect(resumed.assignments).toEqual([expect.objectContaining({ id: first.id, state: 'ended' }),
+      expect.objectContaining({ state: 'pending' })])
+    const continuation = resumed.inputs.at(-1)!
+    expect(continuation).toMatchObject({ kind: 'text',
+      text: 'Acceptance found the original request unfinished. Continue on the existing branch and pull request, opening a new pull request from that branch if it merged, without redoing completed work; if only a person can finish it, report blocked. Remaining work: Document the GitLab source as the request asked.' })
+    expect(resumed.undelivered).toEqual([continuation.id])
+    expect(h.executor.start).toHaveBeenLastCalledWith(expect.objectContaining({ id: ticketId }),
+      expect.objectContaining({ state: 'pending' }))
+    h.settle()
+    const running = h.repo.tickets.get(ticketId)!
+    expect(running.assignments.at(-1)).toMatchObject({ state: 'running', deliveredAt: expect.any(String) })
+    expect(h.delivered).toContainEqual([ticketId, continuation.id])
+
+    // A ready report with an open pull request leaves the ticket open, so continuing ends its assignment instead of resuming.
+    const open = harness()
+    const openId = accepted(open).ticketId!
+    open.engine.bindThread(openId, { source: 'gh', id: 'pr-9' }, true)
+    open.engine.report(openId, { state: 'ready', summary: 'Pull request up' })
+    const report = open.repo.tickets.get(openId)!.assignments.at(-1)!
+    expect(open.repo.tickets.get(openId)!.ended).toBeUndefined()
+    open.engine.continueTicket(openId, 'Finish the requested tests.')
+    expect(open.repo.tickets.get(openId)!.assignments.find(assignment => assignment.id === report.id))
+      .toMatchObject({ state: 'ended', endedReason: 'continued' })
+    expect(open.executor.stop).toHaveBeenLastCalledWith(expect.objectContaining({ id: openId }),
+      expect.objectContaining({ id: report.id }), 'continued')
+  })
+  it('refuses to continue unless the latest report is ready with nothing waiting, the ticket was not stopped and its mandate holds', () => {
+    const h = harness()
+    expect(() => h.engine.continueTicket('missing', 'x')).toThrow(new UserError('unknownTicket'))
+    const ticketId = accepted(h).ticketId!
+    expect(() => h.engine.continueTicket(ticketId, 'x')).toThrow(new UserError('notContinuable'))
+    h.engine.report(ticketId, { state: 'progress', summary: 'working' })
+    expect(() => h.engine.continueTicket(ticketId, 'x')).toThrow(new UserError('notContinuable'))
+    h.engine.report(ticketId, { state: 'ready', summary: 'done' })
+    h.engine.continueTicket(ticketId, 'first')
+    h.settle()
+    expect(() => h.engine.continueTicket(ticketId, 'again')).toThrow(new UserError('notContinuable'))
+
+    // Newer work waiting for an assignment keeps it busy, even when the ready report did not end the ticket.
+    const live = harness()
+    const liveId = accepted(live).ticketId!
+    live.engine.bindThread(liveId, { source: 'gh', id: 'pr-9' }, true)
+    live.engine.report(liveId, { state: 'ready', summary: 'Pull request up' })
+    live.engine.note(liveId, 'A related fact arrived.')
+    expect(() => live.engine.continueTicket(liveId, 'x')).toThrow(new UserError('notContinuable'))
+
+    const stopped = harness()
+    const stoppedId = accepted(stopped).ticketId!
+    stopped.engine.bindThread(stoppedId, { source: 'gh', id: 'pr-9' }, true)
+    stopped.engine.report(stoppedId, { state: 'ready', summary: 'done' })
+    stopped.engine.stopTicket(stoppedId)
+    expect(() => stopped.engine.continueTicket(stoppedId, 'x')).toThrow(new UserError('ticketStopped'))
+
+    const revoked = harness()
+    const revokedId = accepted(revoked).ticketId!
+    revoked.engine.report(revokedId, { state: 'ready', summary: 'done' })
+    revoked.setVersion('revoked')
+    expect(() => revoked.engine.continueTicket(revokedId, 'x')).toThrow(new UserError('mandateRevoked'))
+  })
   it('refuses a question with a result or an answer, and questions or answers that name no person\'s message of the ticket', () => {
     const h = harness()
     const ticketId = accepted(h).ticketId!

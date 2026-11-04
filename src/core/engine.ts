@@ -164,6 +164,12 @@ export class Engine {
    * @throws UserError when the ticket is unknown, has ended, or is not retryable.
    */
   retryTicket(ticketId: string): Ticket { return this.repo.atomic(() => this.tickets.retry(ticketId)) }
+  /**
+   * Acceptance found a `ready` result unfinished: continue the ticket under the same Mandate with a new Assignment that takes
+   * `work`, what remains, in the same Executor Session, directory, branch and pull request. An ended ticket resumes.
+   * @throws UserError when the ticket is unknown or not continuable.
+   */
+  continueTicket(ticketId: string, work: string): Ticket { return this.repo.atomic(() => this.tickets.continueTicket(ticketId, work)) }
 
   // The Executor
 
@@ -260,7 +266,7 @@ export class Engine {
 /** What Sources ask and tell the Engine. */
 export type EngineForSources = Pick<Engine, 'receive' | 'bindThread' | 'threadClosed'>
 /** What the main Session asks of the Engine. */
-export type EngineForMainSession = Pick<Engine, 'candidate' | 'candidateDelivered' | 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'>
+export type EngineForMainSession = Pick<Engine, 'candidate' | 'candidateDelivered' | 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note' | 'continueTicket'>
 /** What people ask of the Engine, through the panel or the main Session. */
 export type EngineForPeople = Pick<Engine, 'stopTicket' | 'retryTicket' | 'reevaluate' | 'unsubscribe' | 'dismiss'>
 /** What Settings tells the Engine. */

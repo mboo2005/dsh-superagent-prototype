@@ -105,6 +105,14 @@ Chat Channels receive one final notice about the pull-request outcome. GitHub al
 
 "Awaiting review" therefore means a `ready` Report with a pull request.
 
+### Acceptance and continuation
+
+The main Session accepts each `ready` Report against the original request before relaying it: from the Report and the source message it checks that each requested outcome is delivered, not merely described, without inspecting code or logs.
+
+When acceptance finds work the worker can still do, the main Session continues the Ticket: a new Assignment takes the remaining work, as a text Input, under the same Mandate and in the same Executor Session and directory. The worker continues the existing branch and pull request, or opens a new pull request from that branch if it merged. A Ticket that ended on that `ready` Report resumes; one a person stopped stays ended. The latest Report must be `ready`, and no Input may have reached the worker after it, so an Assignment busy with newer work is not continued.
+
+A continuation asks no person and adds no scope: it carries only outcomes the original request already requires. When the worker names a step or decision only a person can supply, the main Session relays that question instead.
+
 ### Follow-ups and context Threads
 
 The Executor decides human follow-ups on its Ticket's own Threads. It handles in-scope requests and hands back requests beyond its scope or for another Ticket. Once no Executor owns the message, it becomes a candidate for the main Session. The main Session may otherwise act on the follow-up only to stop work at the person's request.
