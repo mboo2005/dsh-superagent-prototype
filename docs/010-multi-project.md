@@ -128,13 +128,20 @@ The owner approved this direction and answered the token question; the rest take
 
 ## Implementation status
 
-Phase A (the kind-neutral change hooks) is implemented on this branch; phases B–E are not.
+Phase A (the kind-neutral change hooks) is implemented on this branch:
 
 - `src/sources/change.ts` owns what was GitHub-specific: `changesOf`/`changeOf`, `claimChange`, `observeChange`, and `endNotices`. A kind supplies a `ChangeHost` (its thread prefix, the word it uses for a change, its account, its repository, its Thread facts, and its link).
 - `SourceKind.change` and `SourceRegistry.change(source, deployment)` expose that adapter, and the runtime's end-of-ticket notice loop asks the registry instead of calling GitHub helpers, so a second code host needs no runtime change.
 - `src/sources/github-pull.ts` is now the GitHub adapter of the same lifecycle and keeps its external helpers and notice IDs.
 
-Remaining phases need, besides the work itself, a reachable self-hosted GitLab instance and a token file to verify against: phases B–E touch `src/app/setup.ts`, `src/deployment.ts`, `src/infra/environment.ts` and the panel, and their setup checks are keyed to `github` and `feishu` today.
+Phase B has started with the parts that do not depend on the rest of the kind:
+
+- `src/sources/gitlab-api.ts` is the REST transport: the token is read from a file (alone, or as a `NAME=value` line of an existing credential file), calls carry `PRIVATE-TOKEN`, failures keep the HTTP status, and `gitlabPages` follows `X-Next-Page`. It is verified against a company self-hosted instance: `/projects/:id` for a nested group project, a paged merge request list, and a token file read from the deployment's existing credentials.
+- `src/sources/gitlab-trigger.ts` turns notes, issues and merge requests into Triggers (mentions, GitLab's own `_bot` accounts, an edited note re-ingested under its `updated_at`) and a merge request into the generic `Change`.
+
+Still missing in phase B: the GitLab kind itself (`src/sources/gitlab.ts`: configuration, health, poll round, Channel and Thread context), its plugin entry and `cordis.patch.yml` registration, the GitLab git credential helper in `src/infra/environment.ts`, and setup verification. Phase C's tool and prompt work (a `gitlab()` reader tool instead of `gh`, MR claiming in the executor's `orchestrator_report`) is untouched, so a GitLab deployment can be configured and read but cannot yet end a ticket through a merge request.
+
+Remaining phases touch `src/app/setup.ts`, `src/deployment.ts`, `src/infra/environment.ts` and the panel, and their setup checks are keyed to `github` and `feishu` today; the instance and token file that B verifies against are available.
 
 ## Risks
 
