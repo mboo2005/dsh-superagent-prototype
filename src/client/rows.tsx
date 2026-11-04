@@ -34,7 +34,8 @@ export function TicketLine({ ticket, question, onChanged, context }: {
         {ticket.actions.retry && <ConfirmButton variant="outline" icon="refresh" label={t('retry')} title={t('retryTitle')}
           message={t('retryConfirm', { title: ticket.title })}
           onConfirm={() => after(call('POST tickets/:id/retry', { id: ticket.id }))} />}
-        {ticket.actions.retry && ticket.sessionId && <SessionButton variant="outline" sessionId={ticket.sessionId} />}
+        {/* A started Ticket always offers its worker Session, so a person can watch or steer it while it runs. */}
+        {ticket.sessionId && <SessionButton variant="outline" sessionId={ticket.sessionId} />}
         {ticket.actions.stop && <ConfirmButton variant="outline" icon="stop" label={t('stop')} title={t('stopConfirmTitle')}
           message={t('stopConfirm', { title: ticket.title })}
           onConfirm={() => after(call('POST tickets/:id/stop', { id: ticket.id }))} />}

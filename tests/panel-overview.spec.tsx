@@ -63,7 +63,8 @@ it('offers each Ticket that needs a person its actions on the overview: answer i
   await click(zh.confirm)
   expect(server.requests.some(request => request.path === 'tickets/t4/retry' && request.method === 'POST')).toBe(true)
   await click(all('.dt-ticket-actions button').find(button => button.textContent === '打开 Session')!)
-  expect(server.opened).toEqual(['worker-t4'])
+  // Every started Ticket offers its worker Session, so the first one clicked is t1's; t4's follows it.
+  expect(server.opened).toEqual(['worker-t1'])
   await click(all('.dt-ticket-actions button').filter(button => button.textContent === '停止').at(-1)!)
   await click(zh.confirm)
   expect(server.requests.some(request => request.path === 'tickets/t4/stop' && request.method === 'POST')).toBe(true)
