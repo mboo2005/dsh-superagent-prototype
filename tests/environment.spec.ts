@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
+import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, verifyEnvironment, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -32,6 +32,17 @@ describe('worker shims', () => {
     const { stdout } = await exec('gh', ['api', 'user'], { env: { PATH: path }, timeout: 10_000 })
     expect(JSON.parse(stdout)).toEqual({ login: 'agent-bot', config: `${dir}/agent-config`, path: [join(dir, 'venv'), join(dir, 'real'), '/usr/bin', '/bin'].join(':') })
   })
+  it('run `glab` through the GitLab project\'s wrapper without reaching the shim again, and fail it without a GitLab project', async () => {
+    program(join(dir, 'real', 'glab'), 'echo "{\\"config\\":\\"$GLAB_CONFIG_DIR\\",\\"path\\":\\"$PATH\\"}"')
+    const wrapper = program(join(dir, 'glab-agent'), `GLAB_CONFIG_DIR=${dir}/agent-config exec glab "$@"`)
+    const gitlab = { url: 'https://gitlab.example.com', host: 'gitlab.example.com', project: 'group/project', cli: wrapper, account: 'agent', email: 'agent@example.com' }
+    await writeEnvironment(testDeployment({ stateDir: dir, gitlab }), [])
+    const path = [workerBin(dir), join(dir, 'real'), '/usr/bin', '/bin'].join(':')
+    const { stdout } = await exec('glab', ['api', 'user'], { env: { PATH: path }, timeout: 10_000 })
+    expect(JSON.parse(stdout)).toEqual({ config: `${dir}/agent-config`, path: [join(dir, 'real'), '/usr/bin', '/bin'].join(':') })
+    await writeEnvironment(testDeployment({ stateDir: dir }), [])
+    await expect(exec(join(workerBin(dir), 'glab'), ['api', 'user'])).rejects.toMatchObject({ code: 1, stderr: 'glab is unavailable: this installation has no GitLab project.\n' })
+  })
   it('make `lark-cli` fail without a Feishu bot and each blocked command fail with the agent\'s login', async () => {
     await writeEnvironment(testDeployment({ stateDir: dir, feishu: undefined }), ['personal-gh'])
     const bin = workerBin(dir)
@@ -49,7 +60,7 @@ describe('worker shims', () => {
   it('replace only what dsh-superagent wrote and refuse anything else in its places', async () => {
     await writeEnvironment(testDeployment({ stateDir: dir }), ['old-cli'])
     await writeEnvironment(testDeployment({ stateDir: dir }), [])
-    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'lark-cli'])
+    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'glab', 'lark-cli'])
     // A file that merely contains the marker on a later line, a symlink to a shim, and a foreign gitconfig are all rejected.
     writeFileSync(join(workerBin(dir), 'notes'), `notes\nmore\n${readFileSync(join(workerBin(dir), 'gh'), 'utf8').split('\n')[1]}\n`)
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow(`${join(workerBin(dir), 'notes')} was not written by dsh-superagent`)
@@ -66,10 +77,20 @@ describe('worker shims', () => {
     const legacy = (file: string, name: string) => writeFileSync(file, readFileSync(file, 'utf8').replace('Written by dsh-superagent', `Written by ${name}`))
     legacy(join(workerBin(dir), 'old-cli'), 'dsh-tag'); legacy(join(workerBin(dir), 'older-cli'), 'dsh-freelancer'); legacy(workerGitConfig(dir), 'dsh-go')
     await writeEnvironment(testDeployment({ stateDir: dir }), [])
-    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'lark-cli'])
+    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'glab', 'lark-cli'])
     expect(readFileSync(workerGitConfig(dir), 'utf8')).toContain('Written by dsh-superagent')
   })
 })
+
+/** SubprocessRuntime whose successive git config reads return the given credential-helper lines. */
+const verifying = (...stdout: string[]): SubprocessRuntime => {
+  let next = 0
+  return { spawn: () => {
+    const text = stdout[next++] ?? ''
+    const reader = { readFrom: () => ({ text, nextOffset: text.length, lossy: false }) }
+    return { done: Promise.resolve({ exitCode: 0, signal: null }), collected: { stdout: reader, stderr: reader } }
+  } } as unknown as SubprocessRuntime
+}
 
 describe('agent git configuration', () => {
   it('ignores the operator\'s global and system git configuration, also after DSH drops credential-shaped variables', async () => {
@@ -93,6 +114,19 @@ describe('agent git configuration', () => {
     await expect(git('-C', 'repo', 'commit', '--allow-empty', '-q', '-m', 'without identity')).rejects.toMatchObject({ stderr: expect.stringContaining('no email was given') })
     await git('-C', 'repo', '-c', 'user.name=Alice', '-c', 'user.email=alice@example.com', 'commit', '--allow-empty', '-q', '-m', 'with identity')
     expect(await git('-C', 'repo', 'log', '-1', '--format=%an <%ae> / %cn <%ce>')).toBe('Alice <alice@example.com> / Alice <alice@example.com>')
+  })
+
+  it('binds git to the GitLab host with that project\'s CLI and accepts both hosts when each helper answers', async () => {
+    const gitlab = { url: 'https://gitlab.example.com', host: 'gitlab.example.com', project: 'group/project', cli: '/opt/tools/glab', account: 'agent', email: 'agent@example.com' }
+    const deployment = testDeployment({ stateDir: dir, gitlab })
+    await writeEnvironment(deployment, [])
+    const config = readFileSync(workerGitConfig(dir), 'utf8')
+    expect(config).toContain(`[credential "https://gitlab.example.com"]\n\thelper = "${credentialHelper('/opt/tools/glab')}"`)
+    expect(config).toContain('[url "https://gitlab.example.com/"]\n\tinsteadOf = git@gitlab.example.com:')
+    const outputs = [['github.com', '/bin/false'], ['gitlab.example.com', '/opt/tools/glab']]
+      .map(([, cli]) => [`file:${workerGitConfig(dir)}`, credentialHelper(cli!), ''].join('\0'))
+    await expect(verifyEnvironment(deployment, verifying(...outputs), new AbortController().signal)).resolves.toBeUndefined()
+    await expect(verifyEnvironment(deployment, verifying(...outputs.slice(0, 1)), new AbortController().signal)).rejects.toMatchObject({ code: 'gitTooOld' })
   })
 })
 

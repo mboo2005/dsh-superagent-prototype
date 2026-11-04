@@ -1,7 +1,7 @@
 /** Probes repository and account CLIs, configures the worker execution environment and command shims, and tracks setup readiness. */
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError } from '../core/index.ts'
-import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, workerProbe, type Deployment, type Machine } from '../deployment.ts'
+import { SETUP_FIELDS, gitlabProject, resolveDeployment, resolveFeishuBot, workerProbe, type Deployment, type Machine } from '../deployment.ts'
 import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
@@ -83,7 +83,8 @@ export class Setup {
       context.logger.warn('dsh-superagent leaves Feishu out: %s', error.message)
       return undefined
     })
-    const resolved = { ...deployment, ...(feishu ? { feishu } : {}) }
+    const gitlab = gitlabProject(settings.sources.gitlab?.config)
+    const resolved = { ...deployment, ...(gitlab ? { gitlab } : {}), ...(feishu ? { feishu } : {}) }
     const machineProblem = (error: unknown): never => {
       if (error instanceof SetupError) throw error
       throw new SetupError('environmentFailed', { output: error instanceof Error ? error.message : String(error) })

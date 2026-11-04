@@ -43,27 +43,32 @@ export interface ChangeHost {
   facts(change: Change): Record<string, ThreadFact | null>
   /** Absolute URL of a change, for terminal notices. */
   link(id: number): string
+  /** The Thread key of one of this host's changes, such as `github:12` or `gitlab:mr:12`. */
+  thread(id: number): string
+  /** The change number a Thread key of this Source names, or undefined for a Thread that is not a change of this host. */
+  id(thread: string): number | undefined
+  /** Reads the change's current state from the host, so the Executor can claim the change a report names. */
+  read(ctx: SourceContext, id: number, signal?: AbortSignal): Promise<Change>
 }
 
 /**
  * The parts of a ChangeHost a terminal notice needs, for a caller that has no deployment at hand.
  * --- @ty.aicoding@ ---
  */
-export type NoticeHost = Pick<ChangeHost, 'source' | 'term' | 'link'>
+export type NoticeHost = Pick<ChangeHost, 'source' | 'term' | 'link' | 'id'>
 
 /**
  * The Thread key of a change on its Source.
  * --- @ty.aicoding@ ---
  */
-export const changeThread = (host: Pick<ChangeHost, 'source'>, id: number): string => `${host.source}:${id}`
-/** The change number a Thread key names, or undefined for another Thread. */
-export const changeIn = (host: Pick<ChangeHost, 'source'>, thread: string): number | undefined =>
-  thread.startsWith(`${host.source}:`) ? Number(thread.slice(host.source.length + 1)) : undefined
+export const changeThread = (host: Pick<ChangeHost, 'thread'>, id: number): string => host.thread(id)
+/** The change number a Thread key of this host names, or undefined for another Thread. */
+export const changeIn = (host: Pick<ChangeHost, 'id'>, thread: string): number | undefined => host.id(thread)
 /** The changes a ticket follows, oldest first; `open` keeps the ones not yet closed. */
-export const changesOf = (host: Pick<ChangeHost, 'source'>, ticket: Pick<Ticket, 'follows'>, open = false): number[] =>
+export const changesOf = (host: Pick<ChangeHost, 'id'>, ticket: Pick<Ticket, 'follows'>, open = false): number[] =>
   (ticket.follows ?? []).filter(item => !open || !item.closed).flatMap(item => changeIn(host, item.thread) ?? [])
 /** The newest change a ticket follows (the last open one, else the last closed), if any. */
-export const changeOf = (host: Pick<ChangeHost, 'source'>, ticket: Pick<Ticket, 'follows'>): number | undefined =>
+export const changeOf = (host: Pick<ChangeHost, 'id'>, ticket: Pick<Ticket, 'follows'>): number | undefined =>
   changesOf(host, ticket, true).at(-1) ?? changesOf(host, ticket).at(-1)
 /** True when the change was opened by the agent's account from a branch in the configured repository (not a fork). */
 export const agentChange = (change: Change, host: Pick<ChangeHost, 'account' | 'repository'>): boolean =>
@@ -87,7 +92,7 @@ export function claimChange(ctx: SourceContext, host: ChangeHost, ticketId: stri
     return `${host.term} does not belong to this ticket: use the source ${host.term} or a ${host.term} by ${host.account} from a branch whose last path segment is DSH_SUPERAGENT_NAME; omit pr_number when no ${host.term} exists`
   }
   const owner = ctx.tickets.open().find(item => changesOf(host, item, true).includes(change.id))
-  if (owner && owner.id !== ticketId) return 'PR already belongs to another active ticket'
+  if (owner && owner.id !== ticketId) return `${host.term} already belongs to another active ticket`
   const follow = ticket.follows?.find(item => item.thread === changeThread(host, change.id))
   if (change.state === 'open' && (!follow || follow.closed || (opened && !follow.own))) bind(ctx, host, ticketId, change, opened)
   return undefined
@@ -143,10 +148,9 @@ export function endNotices(ticket: Ticket, request: string, hostFor: (source: st
   const outcome = ticket.ended?.outcome
   if (outcome !== 'merged' && outcome !== 'closed') return []
   const closed = (ticket.follows ?? []).flatMap(item => {
-    const [source, id] = item.thread.split(':')
-    const host = source === undefined ? undefined : hostFor(source)
-    const number = host && id !== undefined ? Number(id) : undefined
-    return item.closed && host && number !== undefined && !Number.isNaN(number) ? [{ item, host, number, at: item.closed.at }] : []
+    const host = hostFor(item.thread.split(':')[0] ?? '')
+    const number = host?.id(item.thread)
+    return item.closed && host && number !== undefined ? [{ item, host, number, at: item.closed.at }] : []
   })
   const latest = (entries: typeof closed) => [...entries].sort((a, b) => b.at.localeCompare(a.at))[0]
   const chosen = latest(closed.filter(entry => entry.item.own)) ?? latest(closed)

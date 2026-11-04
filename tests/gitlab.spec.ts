@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Thread } from '../src/core/index.ts'
 import { key } from '../src/core/index.ts'
 import { CliError } from '../src/infra/commands.ts'
+import { testDeployment } from './fixtures/deployment.ts'
 import { GitlabConfigSchema, gitlabKind, gitlabLink, gitlabThreadContext, noteTrigger, pollRound, sendGitlab, todoTrigger,
   type GitlabConfig } from '../src/sources/gitlab.ts'
 import type { SourceContext } from '../src/sources/host.ts'
@@ -27,6 +28,12 @@ describe('GitLab configuration', () => {
     expect(await pollRound(ctx)).toBe(60)
     expect(ctx.commands.run).not.toHaveBeenCalled()
     expect(await pollRound(context(config({ url: 'https://' })))).toBe(60)
+  })
+  it('exposes the project, its host and the agent account to the execution environment', () => {
+    const values = gitlabKind.environment?.values({ deployment: testDeployment(), config: config({ email: '' }) })
+    expect(values).toMatchObject({ DSH_SUPERAGENT_GITLAB_URL: 'https://gitlab.example.com', DSH_SUPERAGENT_GITLAB_HOST: 'gitlab.example.com',
+      DSH_SUPERAGENT_GITLAB_PROJECT: 'group/sub/project', DSH_SUPERAGENT_GITLAB_ACCOUNT: 'agent',
+      DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL: 'agent@users.noreply.gitlab.example.com' })
   })
   it('describes the kind as a Source peer with its own project path', () => {
     expect(gitlabKind.kind).toBe('gitlab')

@@ -160,7 +160,15 @@ export class Runtime extends Service implements SourceHost {
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
-        get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
+        changes: ticket => {
+          if (!setup.configured()) return []
+          const followed = (ticket.follows ?? []).map(item => item.thread.slice(0, item.thread.indexOf(':')))
+          const order = [sourceTrigger(runtime, ticket)?.source, ...followed, 'github', 'gitlab'].filter((source): source is string => !!source)
+          return [...new Set(order)].flatMap(source => {
+            const host = sources.change(source, setup.deployment)
+            return host ? [{ source, host, context: runtime.context({ kind: source, health: [source] }) }] : []
+          })
+        },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()

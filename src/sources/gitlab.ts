@@ -10,6 +10,7 @@ import { key, type Thread, type Trigger } from '../core/index.ts'
 import { CliError } from '../infra/commands.ts'
 import { sameName } from '../infra/text.ts'
 import { health, sourceContext, type Health, type SourceContext } from './host.ts'
+import { gitlabChange, pollTicketMrs } from './gitlab-change.ts'
 import type { ChannelLink, ChannelLinks, ContextMessage, ContextPart, ContextPartName, Localized, SourceKind, ThreadContext } from './kind.ts'
 import { pause } from './poll.ts'
 
@@ -109,7 +110,9 @@ export function noteTrigger(note: GitlabNote, target: Place, config: GitlabConfi
     ...mentioned(body, config.account) ? { addressed: 'mention' as const } : {},
     at: at(edited), text: body,
     channel: { source: SOURCE, thread: threadId(target.kind, target.iid), address: addressOf(target) },
-    url: note.web_url ?? target.url ?? '', meta: { kind: target.kind, iid: target.iid, project: target.project, noteId: note.id, author: note.author.username } }
+    url: note.web_url ?? target.url ?? '',
+    meta: { kind: target.kind, iid: target.iid, project: target.project, noteId: note.id, author: note.author.username,
+      ...target.kind === 'mr' ? { isPr: true as const, number: target.iid } : {} } }
 }
 /** Builds the Trigger for one pending to-do, or undefined for a target type this Source does not watch. */
 export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | undefined {
@@ -128,7 +131,8 @@ export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | u
     addressed: todo.action_name === 'assigned' || todo.action_name === 'directly_addressed' ? 'direct' : 'mention',
     at: at(todo.created_at), text: todo.body?.trim() || todoTarget.title || '',
     channel: { source: SOURCE, thread: threadId(kind, iid), address: addressOf(target) }, url: todo.target_url ?? todoTarget.web_url ?? '',
-    meta: { kind, iid, project: config.project, todoId: todo.id, action: todo.action_name, author: todo.author.username } }
+    meta: { kind, iid, project: config.project, todoId: todo.id, action: todo.action_name, author: todo.author.username,
+      ...kind === 'mr' ? { isPr: true as const, number: iid } : {} } }
 }
 /** The subject URL of the issue or merge request a thread belongs to. */
 function subjectPath(target: Place): string {
@@ -206,7 +210,7 @@ async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Threa
   }
   if (latest !== cursor) ctx.threads.patch(thread.key, { gitlabNoteId: latest })
 }
-/** One polling round: pending to-dos, then notes on every subscribed GitLab thread. */
+/** One polling round: pending to-dos, notes on every subscribed GitLab thread, then the merge requests of open tickets. */
 export async function pollRound(ctx: SourceContext): Promise<number> {
   const config = ctx.config<GitlabConfig>(SOURCE)
   if (!config) return 60
@@ -222,6 +226,7 @@ export async function pollRound(ctx: SourceContext): Promise<number> {
   if (config.observeNotes) {
     for (const thread of ctx.threads.subscribed(SOURCE)) await pollNotes(ctx, config, thread)
   }
+  await pollTicketMrs(ctx)
   return config.pollSeconds
 }
 /** Source kind descriptor for a GitLab project; the same interface GitHub implements. */
@@ -255,6 +260,7 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
   channel: { allowed: (address, config) => !!address.kind && !!address.iid && address.project?.toLowerCase() === config.project.toLowerCase(),
     send: sendGitlab, link: gitlabLink },
   threadContext: gitlabThreadContext,
+  change: deployment => gitlabChange(deployment),
   find: query => {
     const text = query.trim()
     const url = /gitlab[^/]*\/.+\/(?:-\/)?(issues|merge_requests)\/(\d+)/.exec(text)
@@ -273,6 +279,7 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
   environment: {
     variables: [
       { key: 'DSH_SUPERAGENT_GITLAB_URL', description: { zh: '这个来源监听的 GitLab 实例地址', en: 'The GitLab instance this Source watches' } },
+      { key: 'DSH_SUPERAGENT_GITLAB_HOST', description: { zh: '这个 GitLab 实例的主机名，供 glab --hostname 使用', en: 'The hostname of this GitLab instance, for `glab --hostname`' } },
       { key: 'DSH_SUPERAGENT_GITLAB_PROJECT', description: { zh: '这个来源监听的项目，group/project', en: 'The project this Source watches, as group/project' } },
       { key: 'DSH_SUPERAGENT_GITLAB_ACCOUNT', description: { zh: '智能体的 GitLab 账号；glab 以它登录', en: 'The agent\'s GitLab account; glab is signed in to it' } },
       { key: 'DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL', description: { zh: '智能体账号的提交邮箱', en: 'Commit email of the agent\'s account' } },
@@ -281,8 +288,8 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
     ],
     values: ({ config, trigger }) => {
       const iid = trigger?.threads[0]?.source === SOURCE ? trigger.meta.iid : undefined
-      return { DSH_SUPERAGENT_GITLAB_URL: config.url, DSH_SUPERAGENT_GITLAB_PROJECT: config.project,
-        DSH_SUPERAGENT_GITLAB_ACCOUNT: config.account,
+      return { DSH_SUPERAGENT_GITLAB_URL: config.url, DSH_SUPERAGENT_GITLAB_HOST: config.url ? hostOf(config.url) : '',
+        DSH_SUPERAGENT_GITLAB_PROJECT: config.project, DSH_SUPERAGENT_GITLAB_ACCOUNT: config.account,
         DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL: config.email || (config.url ? `${config.account}@users.noreply.${hostOf(config.url)}` : ''),
         DSH_SUPERAGENT_GITLAB_KIND: typeof iid === 'number' ? String(trigger?.meta.kind ?? '') : '',
         DSH_SUPERAGENT_GITLAB_IID: typeof iid === 'number' ? String(iid) : '' }
