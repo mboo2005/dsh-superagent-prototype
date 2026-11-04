@@ -95,7 +95,13 @@ export const ExecutorConfigSchema = z.object({
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),
 }).strict()
-export const SourceInstanceSchema = z.object({ enabled: z.boolean().default(true), config: z.record(z.string(), z.unknown()).default({}) }).strict()
+/**
+ * One stored Source instance. `kind` names the installed kind serving the instance; a stored instance that leaves it
+ * out is its kind's own instance, so `github` and `feishu` settings keep working unchanged.
+ * --- @ty.aicoding@ ---
+ */
+export const SourceInstanceSchema = z.object({ enabled: z.boolean().default(true),
+  kind: z.string().regex(/^[a-z][a-z0-9-]*$/).optional(), config: z.record(z.string(), z.unknown()).default({}) }).strict()
 export const SettingsSchema = z.object({
   paused: z.boolean().default(false),
   sources: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), SourceInstanceSchema).default({}),

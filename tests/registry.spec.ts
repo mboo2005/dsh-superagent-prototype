@@ -31,6 +31,28 @@ describe('Source registry', () => {
       { id: 'retired', kind: 'retired', enabled: true, config: { x: 1 }, installed: false },
     ])
   })
+  it('serves project instances beside the kind instance, inheriting configuration the project leaves out', () => {
+    const settings = SettingsSchema.parse({ sources: {
+      probe: { enabled: true, config: { interval: 7 } },
+      'probe-two': { enabled: true, kind: 'probe', config: { interval: 9 } },
+      'probe-three': { enabled: false, kind: 'probe', config: {} },
+    } })
+    const sources = new SourceRegistry(() => settings)
+    sources.register(probe)
+    expect(sources.instances()).toEqual([
+      { id: 'probe', kind: 'probe', enabled: true, config: { interval: 7 }, installed: true },
+      { id: 'probe-three', kind: 'probe', enabled: false, config: { interval: 7 }, installed: true },
+      { id: 'probe-two', kind: 'probe', enabled: true, config: { interval: 9 }, installed: true },
+    ])
+    expect(sources.kindOf('probe-two')?.kind).toBe('probe')
+    expect(sources.scope({ source: 'probe-two', meta: {} })).toEqual({ listened: true, observed: false })
+    expect(sources.scope({ source: 'probe-three', meta: {} })).toEqual({ listened: false, reason: 'source_disabled' })
+    // A project instance keeps only the fields it names, so the rest keeps inheriting from its kind instance.
+    expect(sources.validate('probe-four', { enabled: true, kind: 'probe', config: { interval: 11 } })).toEqual({ enabled: true, kind: 'probe', config: { interval: 11 } })
+    expect(sources.validate('probe-five', { enabled: true, kind: 'probe', config: {} })).toEqual({ enabled: true, kind: 'probe', config: {} })
+    expect(() => sources.validate('probe-six', { enabled: true, kind: 'missing', config: {} })).toThrow('not installed')
+    expect(sources.policyPart('probe-two')).toBeUndefined()
+  })
   it('validates submitted instances with the kind schema and refuses kinds that are not installed', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({}))
     sources.register(probe)

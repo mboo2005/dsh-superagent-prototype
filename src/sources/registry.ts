@@ -43,51 +43,75 @@ export class SourceRegistry implements SourceScope {
     return new Map(names.flatMap(name => { const entry = this.health.get(name); return entry ? [[name, entry] as const] : [] }))
   }
   kind(id: string): SourceKind | undefined { return this.kinds.get(id) }
-  /** Every registered kind's instance ordered by ID, followed by stored instances whose kind is not installed (with their config kept as stored). */
+  /**
+   * Every configured instance: each installed kind's own instance followed by its stored project instances, in ID order,
+   * and last the stored instances whose kind is not installed (with their config kept as stored).
+   * --- @ty.aicoding@ ---
+   */
   instances(settings = this.settings()): (SourceInstance & { installed: boolean })[] {
-    const installed = [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).map(kind => ({ ...this.resolve(kind, settings.sources[kind.kind]), installed: true }))
-    const orphaned = Object.entries(settings.sources).filter(([id]) => !this.kinds.has(id)).map(([id, stored]) => ({ id, kind: id, enabled: stored.enabled, config: stored.config, installed: false }))
+    const installed = [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => [
+      { ...this.build(kind, settings.sources[kind.kind], kind.kind), installed: true },
+      ...Object.entries(settings.sources)
+        .filter(([id, stored]) => id !== kind.kind && stored.kind === kind.kind)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([id, stored]) => ({ ...this.build(kind, stored, id, settings.sources[kind.kind]?.config), installed: true })),
+    ])
+    const orphaned = Object.entries(settings.sources).filter(([id, stored]) => !this.kinds.has(stored.kind ?? id))
+      .map(([id, stored]) => ({ id, kind: stored.kind ?? id, enabled: stored.enabled, config: stored.config, installed: false }))
     return [...installed, ...orphaned]
   }
+  /** The configured instance `id`, which may be a kind id or a project instance id. */
   instance<C extends Record<string, unknown>>(id: string, settings = this.settings()): SourceInstance<C> | undefined {
-    const kind = this.kinds.get(id)
-    return kind ? this.resolve(kind, settings.sources[id]) as SourceInstance<C> : undefined
+    return this.resolve(id, settings)?.instance as SourceInstance<C> | undefined
   }
-  validate(id: string, value: { enabled: boolean; config: unknown }): { enabled: boolean; config: Record<string, unknown> } {
-    const kind = this.kinds.get(id)
-    if (!kind) throw new Error(`Source kind not installed: ${id}`)
-    return { enabled: value.enabled, config: kind.schema.parse(value.config) }
+  /**
+   * The installed kind serving stored instance `id`; the id may name the kind itself or one of its project instances.
+   * --- @ty.aicoding@ ---
+   */
+  kindOf(id: string, settings = this.settings()): SourceKind | undefined { return this.resolve(id, settings)?.kind }
+  /**
+   * Validates one submitted instance. A `kind` other than the instance id stores a project instance: its submitted fields
+   * are validated over the kind instance's configuration and only those fields are kept, so the rest keeps inheriting.
+   * --- @ty.aicoding@ ---
+   */
+  validate(id: string, value: { enabled: boolean; kind?: string; config: unknown }): { enabled: boolean; kind?: string; config: Record<string, unknown> } {
+    const kind = this.kinds.get(value.kind ?? id)
+    if (!kind) throw new Error(`Source kind not installed: ${value.kind ?? id}`)
+    if (!value.kind || value.kind === id) return { enabled: value.enabled, config: kind.schema.parse(value.config) }
+    const base = this.settings().sources[value.kind]?.config ?? {}
+    const fields = Object.keys(value.config as Record<string, unknown>)
+    const parsed = kind.schema.parse({ ...base, ...value.config as Record<string, unknown> }) as Record<string, unknown>
+    return { enabled: value.enabled, kind: value.kind, config: Object.fromEntries(fields.map(field => [field, parsed[field]])) }
   }
   /** Validates each Source's part of a submitted Policy against its kind; policy parts for uninstalled Source kinds are kept as stored. */
   validatePolicy(parts: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown> & { allowed: { id: string; name?: string }[] }> {
     return Object.fromEntries(Object.entries(parts).map(([id, part]) => {
-      const policy = this.kinds.get(id)?.policy
+      const policy = this.kindOf(id)?.policy
       // `admission` is validated by the Policy's own schema (shared across all kinds), while the kind validates the rest of its part.
       const { admission, ...rest } = part
       return [id, policy ? { ...policy.schema.parse(rest), admission: AdmissionTableSchema.parse(admission ?? {}) } : part as Record<string, unknown> & { allowed: { id: string; name?: string }[] }]
     }))
   }
   policyPart(id: string, settings = this.settings()) {
-    const policy = this.kinds.get(id)?.policy
+    const policy = this.kindOf(id, settings)?.policy
     if (!policy) return undefined
     const { admission, ...rest } = settings.policy.sources[id] ?? {}
     const parsed = policy.schema.safeParse(rest)
     return { ...parsed.success ? parsed.data : policy.schema.parse({}), admission: AdmissionTableSchema.safeParse(admission ?? {}).data ?? {} }
   }
   channelAllowed(channel: { source: string; address: Record<string, string> }, settings = this.settings()): boolean {
-    const kind = this.kinds.get(channel.source)
-    if (!kind) return false
-    const instance = this.resolve(kind, settings.sources[channel.source])
-    return instance.enabled && (kind.channel?.allowed?.(channel.address, instance.config) ?? true)
+    const resolved = this.resolve(channel.source, settings)
+    if (!resolved) return false
+    return resolved.instance.enabled && (resolved.kind.channel?.allowed?.(channel.address, resolved.instance.config) ?? true)
   }
   /** Environment variable declarations for every installed kind, whether enabled or disabled. */
   declarations(): { kind: string; variables: readonly VariableSpec[] }[] {
     return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => kind.environment ? [{ kind: kind.kind, variables: kind.environment.variables }] : [])
   }
   environments(settings = this.settings()) {
-    return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => {
-      const instance = this.resolve(kind, settings.sources[kind.kind])
-      return kind.environment && instance.enabled ? [{ kind, environment: kind.environment, config: instance.config }] : []
+    return this.instances(settings).flatMap(instance => {
+      const kind = this.kinds.get(instance.kind)
+      return kind?.environment && instance.enabled ? [{ kind, environment: kind.environment, config: instance.config }] : []
     })
   }
   /**
@@ -95,31 +119,31 @@ export class SourceRegistry implements SourceScope {
    * `'gone'` when the target (or a kind without channels) can never receive it.
    */
   async send(message: OutboundMessage, commands: Commands): Promise<'sent' | 'gone' | 'waiting'> {
-    const kind = this.kinds.get(message.channel.source)
+    const kind = this.resolve(message.channel.source)?.kind
     if (!kind) return 'waiting'
     return kind.channel ? kind.channel.send({ commands }, message) : 'gone'
   }
   link(channel: ChannelRef, links: ChannelLinks): ChannelLink {
-    const link = this.kinds.get(channel.source)?.channel?.link(channel.address, links)
+    const link = this.resolve(channel.source)?.kind.channel?.link(channel.address, links)
     return link ?? { url: '', label: { zh: channel.source, en: channel.source } }
   }
   find(query: string): { threads: string[]; terms: string[] } {
     const found = [...this.kinds.values()].flatMap(kind => kind.find ? [kind.find(query)] : [])
     return { threads: [...new Set(found.flatMap(item => item.threads))], terms: [...new Set(found.flatMap(item => item.terms))] }
   }
-  repliesTo(trigger: Trigger): string | undefined { return this.kinds.get(trigger.source)?.repliesTo?.(trigger) }
+  repliesTo(trigger: Trigger): string | undefined { return this.resolve(trigger.source)?.kind.repliesTo?.(trigger) }
   /**
    * The change lifecycle adapter of the kind whose Thread prefix is `source`, if that kind has one.
    * --- @ty.aicoding@ ---
    */
   change(source: string, deployment: Deployment): ChangeHost | undefined {
-    return this.kinds.get(source)?.change?.(deployment)
+    return this.resolve(source)?.kind.change?.(deployment)
   }
   threadContext(trigger: Trigger, settings = this.settings()): TriggerContext | undefined {
-    const kind = this.kinds.get(trigger.source)
-    const context = kind?.threadContext
-    if (!kind || !context) return undefined
-    const { config } = this.resolve(kind, settings.sources[kind.kind])
+    const resolved = this.resolve(trigger.source, settings)
+    const context = resolved?.kind.threadContext
+    if (!resolved || !context) return undefined
+    const { kind, instance: { config } } = resolved
     return {
       messageId: context.messageId(trigger),
       read: (commands, part, cursor) => context.read(commands, trigger, part, cursor, config),
@@ -131,17 +155,30 @@ export class SourceRegistry implements SourceScope {
     }
   }
   scope(input: { source: string; meta: Record<string, unknown> }, settings = this.settings()): ScopeResult {
-    const kind = this.kinds.get(input.source)
-    const stored = settings.sources[input.source]
+    const resolved = this.resolve(input.source, settings)
     // Without its kind plugin the stored scope cannot be evaluated, so a configured Source whose plugin is missing listens to nothing.
-    if (!kind) return stored ? { listened: false, reason: 'source_not_installed' } : { listened: true, observed: false }
-    const instance = this.resolve(kind, stored)
+    if (!resolved) return settings.sources[input.source] ? { listened: false, reason: 'source_not_installed' } : { listened: true, observed: false }
+    const { kind, instance } = resolved
     if (!instance.enabled) return { listened: false, reason: 'source_disabled' }
     return kind.scope ? kind.scope({ meta: input.meta }, instance.config) : { listened: true, observed: false }
   }
-  /** Falls back to schema defaults and disables the instance when stored configuration fails validation. */
-  private resolve(kind: SourceKind, stored: { enabled: boolean; config: Record<string, unknown> } | undefined): SourceInstance {
-    const parsed = kind.schema.safeParse(stored?.config ?? {})
-    return { id: kind.kind, kind: kind.kind, enabled: parsed.success && (stored?.enabled ?? true), config: parsed.success ? parsed.data : kind.schema.parse({}) }
+  /** Resolves the kind serving stored instance `id` and builds that instance over its kind instance's configuration. */
+  private resolve(id: string, settings = this.settings()): { kind: SourceKind; instance: SourceInstance } | undefined {
+    const stored = settings.sources[id]
+    const kindId = stored?.kind ?? id
+    const kind = this.kinds.get(kindId)
+    if (!kind) return undefined
+    const base = kindId === id ? undefined : settings.sources[kindId]?.config
+    return { kind, instance: this.build(kind, stored, id, base) }
+  }
+  /**
+   * Parses an instance's stored configuration over its kind instance's configuration, falling back to schema defaults
+   * and disabling the instance when stored configuration fails validation.
+   * --- @ty.aicoding@ ---
+   */
+  private build(kind: SourceKind, stored: { enabled: boolean; config: Record<string, unknown> } | undefined, id: string, base?: Record<string, unknown>): SourceInstance {
+    const source = base ? { ...base, ...stored?.config } : stored?.config ?? {}
+    const parsed = kind.schema.safeParse(source)
+    return { id, kind: kind.kind, enabled: parsed.success && (stored?.enabled ?? true), config: parsed.success ? parsed.data : kind.schema.parse({}) }
   }
 }

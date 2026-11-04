@@ -8,7 +8,7 @@ import type { Store } from '../store.ts'
 import { problemOf, sourceHealth, type HealthMap, type SetupState } from './sources.ts'
 
 function policyOf(sources: SourceRegistry, id: string, health: HealthMap) {
-  const policy = sources.kind(id)?.policy
+  const policy = sources.kindOf(id)?.policy
   if (!policy) return {}
   const part = sources.policyPart(id)!
   const config = sources.instance(id)?.config ?? {}
