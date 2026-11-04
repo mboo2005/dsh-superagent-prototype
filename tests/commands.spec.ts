@@ -42,8 +42,8 @@ describe('account-isolated operations', () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal); vi.spyOn(commands,'pages').mockResolvedValue([])
     const gh = vi.spyOn(commands,'gh').mockResolvedValue({})
     await send(commands, reply)
-    // The disclosure line is prompt text: the model writes it, and the host adds nothing.
-    expect(gh).toHaveBeenCalledWith(['api',`repos/${REPOSITORY}/issues/8/comments`,'--method','POST','-f',expect.stringMatching(/^body=Done\n\n<!-- dsh-superagent:stable-operation -->$/)])
+    // The disclosure line is prompt text: the model writes it, and the host adds only the agent prefix and its marker.
+    expect(gh).toHaveBeenCalledWith(['api',`repos/${REPOSITORY}/issues/8/comments`,'--method','POST','-f',expect.stringMatching(/^body=\[aibot\] Done\n\n<!-- dsh-superagent:stable-operation -->$/)])
     await expect(new Commands(() => deployment, {}, new AbortController().signal).pages(z.unknown(),
       '../../someone/else/issues')).rejects.toThrow()
   })

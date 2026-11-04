@@ -1,11 +1,13 @@
-/** GitHub outbound channel: posts issue/PR comments and review thread replies under the agent account. */
+/** GitHub outbound channel: posts issue/PR comments and review thread replies under the agent account.
+ * --- @ty.aicoding@1793703549240 ---
+ */
 import { z } from 'zod'
 import type { OutboundMessage } from '../core/index.ts'
 import { CliError } from '../infra/commands.ts'
 import { sameName } from '../infra/text.ts'
 import type { SourceContext } from './host.ts'
 import type { ChannelLink, ChannelLinks } from './kind.ts'
-import { githubAddress, githubPage } from './github-trigger.ts'
+import { agentCommentBody, commentMarker, githubAddress, githubPage } from './github-trigger.ts'
 
 const CommentSchema = z.looseObject({
   id: z.number(), body: z.string().nullish(), in_reply_to_id: z.number().nullish(), user: z.looseObject({ login: z.string() }).nullish(),
@@ -14,7 +16,7 @@ const CommentSchema = z.looseObject({
 const gone = (error: unknown): boolean => error instanceof CliError
   && (error.code === 410 || (error.code === 403 && /locked/i.test(error.message)))
 const missing = (error: unknown): boolean => error instanceof CliError && (error.code === 404 || error.code === 410)
-/** Posts a comment or review-thread reply with an embedded HTML marker so retries do not create duplicate comments. */
+/** Posts a comment or review-thread reply with the agent's `[aibot]` prefix and an embedded HTML marker so retries do not create duplicate comments. */
 export async function sendGithub(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const { commands } = host
   const { repository, github } = commands.deployment
@@ -31,12 +33,12 @@ export async function sendGithub(host: Pick<SourceContext, 'commands'>, message:
       rootId = source ? source.in_reply_to_id ?? source.id : undefined
     }
     const path = rootId === undefined ? `issues/${number}/comments` : `pulls/${number}/comments`
-    const marker = `<!-- dsh-superagent:${message.id} -->`
+    const marker = commentMarker(message.id)
     const mine = (comment: z.infer<typeof CommentSchema>) => sameName(comment.user?.login ?? '', github.login)
       && (rootId === undefined || comment.in_reply_to_id === rootId) && (comment.body ?? '').includes(marker)
     if ((await commands.pages(CommentSchema, path)).some(mine)) return 'sent'
     const target = rootId === undefined ? path : `${path}/${rootId}/replies`
-    await commands.api(z.unknown(), target, '--method', 'POST', '-f', `body=${message.text}\n\n${marker}`)
+    await commands.api(z.unknown(), target, '--method', 'POST', '-f', `body=${agentCommentBody(message.text, message.id)}`)
     return 'sent'
   } catch (error) {
     if (gone(error)) return 'gone'

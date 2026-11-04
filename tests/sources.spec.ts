@@ -339,7 +339,11 @@ describe('github source', () => {
     // A mention of the agent addresses it, whatever the case; the agent's own messages are automated.
     expect(commentTrigger({ id: 9, body: '@Agent-Bot please fix', user: { login: 'alice', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot')).toMatchObject({ human: true, addressed: 'mention' })
     expect(commentTrigger({ id: 10, body: 'mail@agent-bot.example', user: { login: 'alice', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot')).not.toHaveProperty('addressed')
-    expect(commentTrigger({ id: 11, body: 'pushed', user: { login: 'Agent-Bot', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot').human).toBe(false)
+    // The agent writes under a configured account, so only its own prefixed writing is automated: an unprefixed comment in that
+    // account is a person's, and the one carrying the hidden marker alone is an older agent comment.
+    expect(commentTrigger({ id: 11, body: '[aibot] pushed', user: { login: 'Agent-Bot', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot').human).toBe(false)
+    expect(commentTrigger({ id: 12, body: 'a person in the agent account', user: { login: 'Agent-Bot', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot').human).toBe(true)
+    expect(commentTrigger({ id: 13, body: 'Done\n\n<!-- dsh-superagent:x -->', user: { login: 'agent-bot', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot').human).toBe(false)
   })
   it('reads the address of an Issue, a PR or a review comment of the repository, and nothing else', () => {
     expect(githubAddress('https://api.github.com/repos/acme/widgets/pulls/9', 'acme/widgets')).toEqual({ number: 9, pr: true })
@@ -484,7 +488,7 @@ describe('github source', () => {
     h.store.threads.save(thread)
     const comment = (id: number, login: string, at: string, body: string) => ({ id, body, user: { login }, created_at: at, updated_at: at })
     github(h, { 'issues/7': { ...issue(7, { title: 'Fix the margin' }), pull_request: { url: 'x' } }, 'pulls/7': openPull(7),
-      'issues/7/comments': [comment(1, 'agent-bot', '2026-09-01T01:00:00Z', 'mine'), comment(2, 'a', '2026-08-01T00:00:00Z', 'old'),
+      'issues/7/comments': [comment(1, 'agent-bot', '2026-09-01T01:00:00Z', '[aibot] mine'), comment(2, 'a', '2026-08-01T00:00:00Z', 'old'),
         comment(3, 'b', '2026-09-01T02:00:00Z', 'new')] })
     await pollGithubThreads(h)
     expect(h.receive).toHaveBeenCalledTimes(1)
@@ -833,14 +837,18 @@ describe('github source', () => {
   }
   it('takes in a new Issue from its notification as a Trigger with its body, addressed to the agent when the body mentions it', async () => {
     const h = host()
-    // A pull request reported at its Issue address, and an Issue the agent opened itself, add nothing.
+    // A pull request reported at its Issue address adds nothing; an Issue opened in the agent's own account is the agent's only
+    // when its body carries the agent prefix, so a person asking there in the same account is read like any other person.
     const agents = { user: { login: 'agent-bot', type: 'User' } }
-    notify(h, [issue(12, { body: '@agent-bot please fix the login' }), issue(13, { pull_request: { url: 'x' } }), issue(14, agents)])
+    notify(h, [issue(12, { body: '@agent-bot please fix the login' }), issue(13, { pull_request: { url: 'x' } }),
+      issue(14, { ...agents }), issue(15, { ...agents, body: '[aibot] background task' })])
     await pollRound(h)
-    expect(h.receive).toHaveBeenCalledOnce()
+    // #14 is a person writing in the agent's account; #15 is the agent's own posting, marked by its prefix.
+    expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.number)).toEqual([14, 12])
     const id = key('github-issue', '12')
     const url = 'https://github.com/acme/widgets/issues/12'
-    expect(h.receive.mock.calls[0]![0]).toEqual({ id, source: 'github', threads: [{ source: 'github', id: '12' }],
+    const read = (number: number) => h.receive.mock.calls.map(([trigger]) => trigger).find(trigger => trigger.meta.number === number)!
+    expect(read(12)).toEqual({ id, source: 'github', threads: [{ source: 'github', id: '12' }],
       actor: { source: 'github', id: 'alice' }, human: true, at: '2026-09-09T00:00:00Z',
       text: 'Login fails\n\n@agent-bot please fix the login', addressed: 'mention', channel: githubChannel(12, url), url,
       meta: { number: 12, isPr: false, kind: 'issue' } })
@@ -1222,18 +1230,21 @@ describe('observing the GitHub repository', () => {
     const calls = repository(h, { issues: [issue(3, { created_at: at(-24), updated_at: at(1) }),
       issue(4, { created_at: at(2), updated_at: at(2) }),
       { ...issue(5, { created_at: at(3), updated_at: at(3) }), pull_request: { url: 'x' } },
-      issue(6, { created_at: at(4), updated_at: at(4), user: { login: 'agent-bot', type: 'User' } })] })
+      issue(6, { created_at: at(4), updated_at: at(4), user: { login: 'agent-bot', type: 'User' }, body: '[aibot] background task' }),
+      issue(7, { created_at: at(5), updated_at: at(5), user: { login: 'agent-bot', type: 'User' }, body: 'a person in that account' })] })
     await pollRound(h)
-    // #3 was opened before the Source observed Issues, and #6 is the agent's own.
+    // #3 was opened before the Source observed Issues; #6 is the agent's own posting, marked by its prefix; #7 is a person
+    // writing in the agent's account, which counts as a person.
     expect(h.receive.mock.calls.map(([trigger]) => [trigger.meta.number, trigger.meta.kind, trigger.id]))
-      .toEqual([[4, 'issue', issueTrigger(issue(4), 'agent-bot').id], [5, 'pull', issueTrigger(issue(5), 'agent-bot').id]])
+      .toEqual([[4, 'issue', issueTrigger(issue(4), 'agent-bot').id], [5, 'pull', issueTrigger(issue(5), 'agent-bot').id],
+        [7, 'issue', issueTrigger(issue(7), 'agent-bot').id]])
     const started = { issues: at(0), pulls: at(0) }
-    expect(h.store.get('github-stream:issues')).toEqual({ since: cursorAt(at(4)), started })
+    expect(h.store.get('github-stream:issues')).toEqual({ since: cursorAt(at(5)), started })
     const list = () => calls.filter(args => args[1]!.startsWith('repos/acme/widgets/issues?'))
     expect(list()[0]![1]).toContain(`since=${encodeURIComponent(at(0))}`)
     // The next round repeats the request at the newest Issue, whose ETag the round after sends, which GitHub answers 304 for.
     await pollRound(h)
-    expect(h.store.get('github-stream:issues')).toEqual({ since: cursorAt(at(4)), started, etag: '"same"' })
+    expect(h.store.get('github-stream:issues')).toEqual({ since: cursorAt(at(5)), started, etag: '"same"' })
     h.receive.mockClear()
     await pollRound(h)
     expect(list().at(-1)).toEqual(expect.arrayContaining(['-H', 'If-None-Match: "same"']))

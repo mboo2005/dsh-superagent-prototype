@@ -59,14 +59,42 @@ function commentText(comment: GithubComment, kind: 'conversation' | 'inline' | '
 }
 export const mentions = (text: string, login: string): boolean =>
   new RegExp(`(?:^|[^a-zA-Z0-9_@])@${escapeRegExp(login)}(?![a-zA-Z0-9_-])`, 'i').test(text)
-const author = (user: { login: string; type?: string }, agent: string) =>
-  ({ actor: { source: SOURCE, id: user.login }, human: isHumanLogin(user) && !sameName(user.login, agent) })
+/**
+ * Marks every comment the agent posts, so the Source can tell its own writing apart from a person's when both share one account.
+ * --- @ty.aicoding@1793703549240 ---
+ */
+export const AGENT_PREFIX = '[aibot]'
+/**
+ * The text a comment posted by `messageId` carries: the agent's prefix, then the message, then the HTML marker that makes a retry idempotent.
+ * --- @ty.aicoding@1793703549240 ---
+ */
+export const agentCommentBody = (text: string, messageId: string): string => `${AGENT_PREFIX} ${text}\n\n${commentMarker(messageId)}`
+/** The hidden marker a comment of `messageId` carries; `sendGithub` matches it to avoid posting the same message twice. */
+export const commentMarker = (messageId: string): string => `<!-- dsh-superagent:${messageId} -->`
+/**
+ * True when a comment body carries dsh-superagent's prefix or its hidden marker, written before the prefix existed.
+ * --- @ty.aicoding@1793703549240 ---
+ */
+export const agentComment = (body: string | null | undefined): boolean =>
+  (body ?? '').trimStart().startsWith(AGENT_PREFIX) || (body ?? '').includes('<!-- dsh-superagent:')
+/**
+ * Whether a GitHub event counts as written by a person rather than by the agent. The agent writes under its own account, so an
+ * account name alone cannot tell the two apart: a comment it wrote carries its prefix or marker, while an Issue or PR it opened
+ * does not. Those therefore count only when `agentOpened` says the event is the agent's own opening.
+ * --- @ty.aicoding@1793703549240 ---
+ */
+export const authored = (user: { login: string; type?: string }, agent: string, body: string | null | undefined,
+  agentOpened = false): boolean =>
+  isHumanLogin(user) && !(sameName(user.login, agent) && (agentOpened || agentComment(body)))
+/** Builds the trigger author, marking the agent's own posting as machine-written so it can never authorize work. */
+const author = (user: { login: string; type?: string }, agent: string, body: string | null | undefined, agentOpened = false) =>
+  ({ actor: { source: SOURCE, id: user.login }, human: authored(user, agent, body, agentOpened) })
 /** Builds a trigger for a comment or review; text is empty for a bodyless comment or a `COMMENTED` review without a body. */
 export function commentTrigger(comment: GithubComment, ref: PullRef, kind: 'conversation' | 'inline' | 'review', agent: string): Trigger {
   const at = comment.updated_at ?? comment.submitted_at ?? comment.created_at ?? new Date().toISOString()
   const version = comment.updated_at ?? comment.submitted_at ?? ''
   const id = key('github-comment', comment.html_url ?? `github:${ref.number}`, String(comment.id), version)
-  return { id, source: SOURCE, threads: [{ source: SOURCE, id: String(ref.number) }], ...author(comment.user, agent), at,
+  return { id, source: SOURCE, threads: [{ source: SOURCE, id: String(ref.number) }], ...author(comment.user, agent, comment.body), at,
     text: commentText(comment, kind),
     ...(mentions(comment.body ?? '', agent) ? { addressed: 'mention' as const } : {}),
     channel: githubChannel(ref.number, comment.html_url ?? undefined),
@@ -82,7 +110,7 @@ export function commentTrigger(comment: GithubComment, ref: PullRef, kind: 'conv
 export function issueTrigger(issue: Opened, agent: string): Trigger {
   const body = issue.body ?? ''
   return { id: key('github-issue', String(issue.number)), source: SOURCE,
-    threads: [{ source: SOURCE, id: String(issue.number) }], ...author(issue.user, agent), at: issue.created_at,
+    threads: [{ source: SOURCE, id: String(issue.number) }], ...author(issue.user, agent, body), at: issue.created_at,
     text: `${issue.title}\n\n${body}`,
     ...(mentions(body, agent) ? { addressed: 'mention' as const } : {}),
     channel: githubChannel(issue.number, issue.html_url), url: issue.html_url, meta: { number: issue.number, isPr: false, kind: 'issue' } }
