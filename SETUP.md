@@ -74,6 +74,6 @@ Send one message, under 300 words: what will be installed, the accounts and CLIs
 `scripts/dsh-superagent status` exits 0 with no setup problem. If you run in the operator's own DSH profile, create the hourly check of the Hourly check section of `docs/006-deployment.md` with your schedule tool; otherwise give the operator its prompt to schedule there. Then send one message, under 300 words:
 
 - The panel URL, and that the **Superagent** entry in the sidebar is where to look.
-- How to try it: from an account on the allowed list, comment `@<agent login> <request>` on an issue in the repository. A Ticket appears on the overview within about a minute. A GitLab Source, when enabled beside GitHub, works the same way from its project's Issues and Merge Requests; see [009 GitLab Source](docs/009-gitlab-source.md) for its limits.
+- How to try it: from an account on the allowed list, comment `@<agent login> <request>` on an issue in the repository. A Ticket appears on the overview within about a minute. A GitLab Source, when enabled beside GitHub, works the same way from its project's Issues and Merge Requests; see [009 GitLab Source](docs/011-gitlab-source.md) for its limits.
 - Three rules for the operator, from the Responsibility section of `docs/000-philosophy.md`: start narrow, tune for less noise, own what the agent says.
 - Where to read more: the numbered documents in `docs/`, in order.
