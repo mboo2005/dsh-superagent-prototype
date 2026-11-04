@@ -250,8 +250,8 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
       hint: { zh: '只接收订阅发生之后的新评论，不读以前的。', en: 'Only comments after subscription are received; earlier ones are not read.' } },
   ],
   health: [SOURCE],
-  // Every note on a subscribed Issue or MR is observed; to-dos are always addressed to the agent.
-  scope: () => ({ listened: true, observed: true }),
+  // Notes count as observed only while note polling is on; to-dos are always addressed to the agent.
+  scope: (_input, config) => ({ listened: true, observed: config.observeNotes }),
   channel: { allowed: (address, config) => !!address.kind && !!address.iid && address.project?.toLowerCase() === config.project.toLowerCase(),
     send: sendGitlab, link: gitlabLink },
   threadContext: gitlabThreadContext,

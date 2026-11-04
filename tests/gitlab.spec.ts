@@ -33,6 +33,8 @@ describe('GitLab configuration', () => {
     expect(gitlabKind.health).toEqual(['gitlab'])
     expect(gitlabKind.schema.parse({ url: 'https://gitlab.example.com', project: 'group/project', account: 'agent' }))
       .toMatchObject({ project: 'group/project', account: 'agent' })
+    expect(gitlabKind.scope?.({ meta: {} }, config())).toEqual({ listened: true, observed: true })
+    expect(gitlabKind.scope?.({ meta: {} }, config({ observeNotes: false }))).toEqual({ listened: true, observed: false })
   })
 })
 
