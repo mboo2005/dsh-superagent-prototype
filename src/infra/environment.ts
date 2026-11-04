@@ -101,7 +101,7 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   await shim('glab', gitlab ? run(gitlab.cli) : fail('glab is unavailable: this installation has no GitLab project.'))
   await shim('lark-cli', feishu ? run(feishu.cli) : fail('lark-cli is unavailable: this installation has no Feishu bot.'))
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
-    await shim(name, fail(`${name} is blocked in this installation; use gh, which acts as ${github.login}.`))
+    await shim(name, fail(`${name} is blocked in this installation; use gh or glab, which act as the configured accounts.`))
   }
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
   // git reaches each configured host with that host's CLI credentials, and rewrites SSH remotes to HTTPS so they do too.
