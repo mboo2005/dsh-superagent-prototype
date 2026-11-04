@@ -29,6 +29,10 @@ const asChange = (pr: PullFields): Change => ({
   autoMerge: pr.auto_merge != null, endedAt: pr.merged_at ?? pr.closed_at ?? undefined,
 })
 const AUTO_MERGE_ON: ThreadFact = { label: { zh: '自动合并', en: 'Auto-merge' }, value: { zh: '已开启', en: 'on' } }
+/** The Thread key of one PR, and the PR number a Thread key names; both Sources of the change lifecycle own this mapping. */
+const pullThread = (id: number): string => `${SOURCE}:${id}`
+const pullNumber = (thread: string): number | undefined =>
+  thread.startsWith(`${SOURCE}:`) ? Number(thread.slice(SOURCE.length + 1)) : undefined
 /**
  * The change lifecycle of GitHub pull requests in `deployment`.
  * --- @ty.aicoding@ ---
@@ -37,9 +41,11 @@ export const githubChange = (deployment: Pick<Deployment, 'github' | 'repository
   source: SOURCE, term: 'PR', account: deployment.github.login, repository: deployment.repository,
   facts: change => ({ autoMerge: !(change.state === 'closed' || change.merged) && change.autoMerge ? AUTO_MERGE_ON : null }),
   link: id => githubPage(deployment.repository, id, true),
+  thread: pullThread, id: pullNumber,
+  read: (ctx, id, signal) => readPull(ctx, id, signal).then(asChange),
 })
-export const pullsOf = (ticket: Pick<Ticket, 'follows'>, open = false): number[] => changesOf({ source: SOURCE }, ticket, open)
-export const pullOf = (ticket: Pick<Ticket, 'follows'>): number | undefined => changeOf({ source: SOURCE }, ticket)
+export const pullsOf = (ticket: Pick<Ticket, 'follows'>, open = false): number[] => changesOf({ id: pullNumber }, ticket, open)
+export const pullOf = (ticket: Pick<Ticket, 'follows'>): number | undefined => changeOf({ id: pullNumber }, ticket)
 export { ticketBranch } from './change.ts'
 /** True when the PR was opened by the agent account from a branch in the configured repository (not a fork). */
 export const agentPull = (pr: { user: { login: string }; head?: { repo?: { full_name: string } | null } | null },
@@ -66,6 +72,6 @@ export const observePull = (ctx: SourceContext, pr: Pull): Promise<boolean> =>
  */
 export function pullEndNotices(ticket: Ticket, request: string, repository: string): OutboundMessage[] {
   return endNotices(ticket, request, source => source === SOURCE
-    ? { source: SOURCE, term: 'PR', link: id => githubPage(repository, id, true) }
+    ? { source: SOURCE, term: 'PR', link: id => githubPage(repository, id, true), id: pullNumber }
     : undefined)
 }

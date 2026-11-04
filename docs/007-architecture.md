@@ -116,7 +116,7 @@ The core's codes, such as `timeout`, `policyChanged`, `routed` and `startedTicke
 
 A Ticket keeps each fact once. It is open while it has no `ended`, which records when, by whom, why and with what outcome it ended; what it last said is its latest Assignment Report (`latestReport`); and its Executor Session is named after it (`workerSessionId` in `src/executor/dsh.ts`).
 
-Its fields are typed: `origin`, the admissible Trigger that gave its Eval's batch its strength and the batch itself (`triggerId`, `triggerIds`); `execution`, what the Executor chose (`name`, `directory` and `assignment`); `delivery`, the last failed Input delivery (`error`, `at`), until a delivery succeeds, a new Assignment starts or the Ticket ends; and `follows`, the Threads a Source made it follow, each `{thread, own, closed?}`: `own` when the Ticket opened it, and `closed` with `at` and `outcome` once it closed. Tickets alone writes `follows`; the GitHub Source reads its pull requests with `pullsOf` and `pullOf` (`src/sources/github-pull.ts`).
+Its fields are typed: `origin`, the admissible Trigger that gave its Eval's batch its strength and the batch itself (`triggerId`, `triggerIds`); `execution`, what the Executor chose (`name`, `directory` and `assignment`); `delivery`, the last failed Input delivery (`error`, `at`), until a delivery succeeds, a new Assignment starts or the Ticket ends; and `follows`, the Threads a Source made it follow, each `{thread, own, closed?}`: `own` when the Ticket opened it, and `closed` with `at` and `outcome` once it closed. Tickets alone writes `follows`; the GitHub and GitLab Sources read their pull requests and merge requests with `pullsOf`/`pullOf` and `mrsOf`/`mrOf` (`src/sources/github-pull.ts`, `src/sources/gitlab-change.ts`).
 
 An Input that carries a Trigger records whether a person wrote it, which `waitsForPerson` reads. A Thread also lists in `context` the subscribed Tickets that follow it only for context, and counts in `expired` the Evals of its queued Triggers that expired in a row; an Evaluation records its `primary` Trigger and when its candidate was `delivered`.
 
@@ -369,6 +369,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/gitlab-trigger.ts` | GitLab notes, issues and merge requests as Triggers, their addresses, and a merge request as the generic change lifecycle's `Change` |
 | `src/sources/github.ts` | The GitHub kind and plugin entry, exported as `./github-watch`: a poll round of notifications, the pull requests of open Tickets with their CI, and subscribed Threads |
 | `src/sources/gitlab.ts` | The GitLab kind and plugin entry, exported as `./gitlab-watch`: pending to-dos and notes on subscribed Issues and MRs of one self-hosted project, and its Channel |
+| `src/sources/gitlab-change.ts` | GitLab merge requests as changes: their API shape read through `glab api`, and the adapter (`gitlabChange`) the generic lifecycle in `change.ts` uses |
 | `src/sources/github-trigger.ts` | GitHub comments, reviews, Issue bodies and CI changes as Triggers, and GitHub addresses |
 | `src/sources/github-pull.ts` | GitHub pull requests as changes: their API shape, and the adapter (`githubChange`) the generic lifecycle in `change.ts` uses |
 | `src/sources/github-channel.ts` | The GitHub Channel: comments and review thread replies, `sent` or `gone` |
@@ -418,6 +419,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/gitlab-api.spec.ts`, `tests/gitlab-trigger.spec.ts` | The GitLab transport (token file, paging, errors) and GitLab notes and merge requests as Triggers and changes |
+| `tests/gitlab-change.spec.ts` | GitLab merge requests through the change lifecycle: the API shape, the change host, reading and claiming, followed IIDs and the ticket poll |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |
 | `tests/assessment.spec.ts` | What the MasterAssessor keeps per Eval, and when it lets go |
 | `tests/background.spec.ts` | Waiting for a worker's shell jobs and subagents: an end that woke it, and a host that stops |

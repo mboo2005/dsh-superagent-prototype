@@ -36,7 +36,7 @@ GLAB_CONFIG_DIR=/home/me/.config/glab-agent glab auth login --hostname gitlab.ex
 
 If the CLI is a wrapper, point `cli` at the wrapper. The host calls `glab api --hostname <host> <path>` and expects JSON. A token in the wrapper's environment is not read or stored by dsh-superagent.
 
-The execution environment exposes `DSH_SUPERAGENT_GITLAB_URL`, `DSH_SUPERAGENT_GITLAB_PROJECT`, `DSH_SUPERAGENT_GITLAB_ACCOUNT`, `DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL`, and, for a GitLab Ticket, `DSH_SUPERAGENT_GITLAB_KIND` and `DSH_SUPERAGENT_GITLAB_IID`.
+The execution environment exposes `DSH_SUPERAGENT_GITLAB_URL`, `DSH_SUPERAGENT_GITLAB_HOST`, `DSH_SUPERAGENT_GITLAB_PROJECT`, `DSH_SUPERAGENT_GITLAB_ACCOUNT`, `DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL`, and, for a GitLab Ticket, `DSH_SUPERAGENT_GITLAB_KIND` and `DSH_SUPERAGENT_GITLAB_IID`.
 
 ## Endpoints used
 
@@ -49,12 +49,17 @@ The execution environment exposes `DSH_SUPERAGENT_GITLAB_URL`, `DSH_SUPERAGENT_G
 
 All calls use the configured CLI and hostname, and only the Source's project. To-dos whose target names another project, or has no URL to check, are ignored.
 
+## Worker delivery
+
+A worker decides per project which CLI to use: `gh` for a GitHub repository and `glab` for a GitLab project, as the worker prompt and the GitLab skill say. `DSH_SUPERAGENT_GITLAB_HOST` is the value `glab --hostname` takes; the project path is `DSH_SUPERAGENT_GITLAB_PROJECT`. When the deployment names a GitLab project, the execution environment writes a `glab` shim that runs the project's configured `cli` and clears any inherited `GITLAB_TOKEN`, so a worker uses exactly the agent's `glab` login. It also configures the deployment's GitLab host in the worker gitconfig with that CLI as the credential helper, the way it configures `github.com` with `gh`.
+
+A worker reports an open Merge Request with the same `pr_number` argument as a pull request. The Executor reads that number through the ticket's Source candidates, most likely first, and claims the first change that accepts it, so an MR opened from a GitLab ticket is bound even when the ticket started on Feishu or GitHub. A ticket that follows `gitlab:mr:<iid>` shows the MR's IID as `pr_number`, and the GitLab poll observes the MRs of open tickets so a merge or close ends the ticket even when no note arrives.
+
 ## Limitations of this slice
 
-The Source covers ingestion, admission context, replies and health. These parts still assume GitHub:
+The Source covers ingestion, admission context, replies, health, merge request lifecycle and worker delivery. Remaining limitations:
 
-- Setup resolves the deployment from the GitHub Source; a GitLab-only installation does not start yet. Enabling both works because the GitHub setup remains the deployment.
-- Worker sessions are prepared with `gh` and GitHub git credentials. A GitLab Ticket can be assessed and replied to, but its worker cannot clone or push a GitLab project until a `glab` shim and GitLab credential setup are added.
-- Merge Request lifecycle (opening, claiming, observing a PR/MR, auto-merge notices) is not implemented for GitLab.
+- Setup resolves the deployment from the GitHub Source; a GitLab-only installation does not start yet. Enabling both works because the GitHub setup remains the deployment, and the GitLab Source then adds the GitLab project to it.
 - `orchestrator_read` has no `gitlab/…` pages; discussion reaches assessments through the Source's Thread context instead.
 - The Source reads one page of 100 to-dos or notes per poll. It does not follow pagination, observe pipelines, or read images and attachment contents.
+- A merge request whose source project differs from the watched project (a fork) is read, claimed and observed, but its branch is not treated as a worker branch for auto-binding.

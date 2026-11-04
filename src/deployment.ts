@@ -47,15 +47,52 @@ export const GithubAccountsSchema = z.object({
   cli: z.string().trim().default(''),
 })
 export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
+/**
+ * The GitLab Source configuration that names the project workers act on, and the account and CLI that reach it.
+ * --- @ty.aicoding@ ---
+ */
+export const GitlabWorkerSchema = z.object({
+  url: z.string().trim().default(''),
+  project: z.string().trim().default(''),
+  cli: z.string().trim().default('glab'),
+  account: z.string().trim().default(''),
+  email: z.string().trim().default(''),
+})
 /** Source configuration keys that affect deployment setup and trigger a restart when changed. */
-export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
+export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape),
+  gitlab: Object.keys(GitlabWorkerSchema.shape) }
 
 export interface Deployment extends Machine {
   repository: string
   github: { cli: string; login: string; noreply: string }
   feishu?: FeishuBot
+  /** The GitLab project workers act on, when a GitLab Source names one; absent when this installation watches no GitLab project. */
+  gitlab?: GitlabProject
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
+/**
+ * The GitLab project workers act on: its web origin and host, `group/project`, the agent's glab CLI, and its commit email.
+ * --- @ty.aicoding@ ---
+ */
+export interface GitlabProject { url: string; host: string; project: string; cli: string; account: string; email: string }
+
+/**
+ * Reads the GitLab project a worker environment and the merge-request lifecycle need from the GitLab Source configuration.
+ * Returns undefined until the URL, project and agent account are all set, so an unconfigured Source leaves the environment as it was.
+ * --- @ty.aicoding@ ---
+ */
+export function gitlabProject(config: unknown): GitlabProject | undefined {
+  const result = GitlabWorkerSchema.safeParse(config ?? {})
+  if (!result.success) return undefined
+  const { url, project, cli, account, email } = result.data
+  if (!url || !project || !cli || !account) return undefined
+  let parsedUrl: URL
+  try { parsedUrl = new URL(url) } catch { return undefined /* The Source reports its own configuration problem. */ }
+  if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') return undefined
+  if (!/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/.test(project)) return undefined
+  const commit = email || `${account}@users.noreply.${parsedUrl.host}`
+  return { url: parsedUrl.origin, host: parsedUrl.host, project, cli, account, email: commit }
+}
 
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
 export function executable(name: string, path: string, exclude?: string): string {

@@ -96,7 +96,7 @@ const RULES: [rule: string, file: string, says: string[], gone?: string[]][] = [
   ['The main Session never merges, closes issues or shows private Feishu content on GitHub', 'orchestrator',
     ['Never merge or enable auto-merge yourself, close issues or expose private Feishu content on GitHub.']],
   ['An Executor merges only as the delivery requirements say, closes no issue and keeps private Feishu content off GitHub', 'worker',
-    ['Never merge a PR directly or enable auto-merge other than as the Delivery requirements section says, close issues or expose private Feishu content on GitHub.']],
+    ['Never merge a PR/MR directly or enable auto-merge other than as the Delivery requirements section says, close issues or expose private Feishu content on GitHub/GitLab.']],
   ['Reading context changes nothing', 'cli', ['Do not alter remote state, authorization, or configuration while reading.']],
   ['Feishu is read as the bot, never as a person', 'cli', ['Feishu uses --as bot; unavailable content does not authorize switching to the user\'s identity.']],
   ['Every GitHub message says an automated agent wrote it', 'team/communication',
@@ -168,6 +168,9 @@ it('shows a ticket card\'s state from a closed set: the open ticket\'s stage, th
   expect(cases.map(([item]) => ticketCard(item).state).every(state => (TICKET_STATES as readonly string[]).includes(state))).toBe(true)
   expect(ticketCard(cases[8]![0])).toMatchObject({ ended: { at: 'e', by: 'human', reason: 'Not needed after all' } })
   expect(ticketCard(ticket)).toMatchObject({ ticket_id: 'ticket-1', pr_number: 42, strength: 'explicit' })
+  // A ticket that follows a GitLab merge request shows its IID, and the GitHub pull request wins when it follows both.
+  expect(ticketCard({ ...ticket, follows: [{ thread: 'gitlab:mr:7', own: true }] })).toMatchObject({ pr_number: 7 })
+  expect(ticketCard(ticket)).toMatchObject({ pr_number: 42 })
   expect(ticketCard(ticket)).not.toHaveProperty('attention')
   expect(ticketCard({ ...ticket, attention: { id: 'q', question: 'Desktop too?' } })).toMatchObject({ attention: { question: 'Desktop too?' } })
 })

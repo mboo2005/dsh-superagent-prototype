@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, executable, gitlabProject, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 
 const exec = promisify(execFile)
@@ -49,6 +49,19 @@ describe('configuration schema', () => {
       .toEqual({ stateDir: join(dir, 'state'), promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 })
     expect(() => Config(minimal({ stateDir: 'relative/dir' }))).toThrow()
     expect(() => Config(minimal({ stateDir: '~/dir' }))).toThrow()
+  })
+  it('resolves the GitLab project a Source configures, with its host and commit email', () => {
+    expect(gitlabProject({ url: 'https://gitlab.example.com/', project: 'group/sub/project', cli: 'glab-agent', account: 'agent' }))
+      .toEqual({ url: 'https://gitlab.example.com', host: 'gitlab.example.com', project: 'group/sub/project',
+        cli: 'glab-agent', account: 'agent', email: 'agent@users.noreply.gitlab.example.com' })
+    expect(gitlabProject({ url: 'https://gitlab.example.com', project: 'group/project', cli: 'glab', account: 'agent', email: 'agent@example.com' }))
+      .toMatchObject({ email: 'agent@example.com' })
+    // An installation that configures no GitLab project leaves it absent, as do incomplete or invalid values.
+    expect(gitlabProject({})).toBeUndefined()
+    expect(gitlabProject(undefined)).toBeUndefined()
+    expect(gitlabProject({ url: 'https://gitlab.example.com', project: 'group/project', account: '' })).toBeUndefined()
+    expect(gitlabProject({ url: 'ftp://gitlab.example.com', project: 'group/project', cli: 'glab', account: 'agent' })).toBeUndefined()
+    expect(gitlabProject({ url: 'https://gitlab.example.com', project: '/project', cli: 'glab', account: 'agent' })).toBeUndefined()
   })
   it('names keys the configuration does not define, and where the values of older keys live now', () => {
     const raw = minimal({ repository: 'acme/widgets', repositoryPath: '/srv/widgets', blockedCommands: [], author: { name: 'Alice' }, extra: 1 })
