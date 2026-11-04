@@ -1,4 +1,4 @@
-# 009 GitLab Source
+# 011 GitLab Source
 
 The GitLab Source watches one project on a company-hosted GitLab instance and turns its to-dos and discussion into Tickets. It is a peer of the GitHub Source: both implement `SourceKind`, both register with the same `SourceRegistry`, and an installation may enable either or both. Each instance keeps its own project path, so a GitLab Source and a GitHub Source can run side by side.
 
