@@ -1,6 +1,8 @@
 /** Concurrency, retry, and validation tests for settings saves, pause toggling, and policy synchronization. */
 import { afterEach, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import { UserError } from '../src/core/index.ts'
+import type { SourceKind } from '../src/sources/kind.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { Setup } from '../src/app/setup.ts'
 import { SettingsConflict } from '../src/app/settings.ts'
@@ -98,4 +100,24 @@ it('records nothing for a pause that changes nothing, refuses a sync while setup
   await expect(settings.sync('feishu')).rejects.toThrow(new UserError('nothingToSync', { source: 'feishu' }))
   vi.mocked(Setup.prototype.configured).mockRestore()
   expect(() => settings.block('source:x')).toThrow(new UserError('unknownBlock', { block: 'source:x' }))
+})
+
+const projectSchema = z.object({ project: z.string().default('') }).strict()
+const projectFields = [{ key: 'project', type: 'text' as const, label: { zh: '项目', en: 'Project' } }]
+const probeKind: SourceKind<{ project: string }> = { kind: 'probe', title: { zh: '探针', en: 'Probe' }, description: { zh: '', en: '' },
+  multi: true, health: [], schema: projectSchema, fields: projectFields }
+const singleKind: SourceKind<{ project: string }> = { kind: 'single', title: { zh: '单个', en: 'Single' }, description: { zh: '', en: '' },
+  health: [], schema: projectSchema, fields: projectFields }
+
+it('accepts one more project instance of a kind that supports several, and refuses other new source blocks', async () => {
+  h = await startRuntime()
+  const { settings, store, sources } = h.runtime
+  sources.register(probeKind); sources.register(singleKind)
+  await settings.save('source:probe-two', { enabled: true, kind: 'probe', config: { project: 'web' } }, 0, 'panel')
+  expect(store.settings().sources['probe-two']).toEqual({ enabled: true, kind: 'probe', config: { project: 'web' } })
+  await expect(settings.save('source:single-two', { enabled: true, kind: 'single', config: {} }, 0, 'panel'))
+    .rejects.toThrow(new UserError('sourceNotMulti', { source: 'single' }))
+  await expect(settings.save('source:missing', { enabled: true, config: {} }, 0, 'panel'))
+    .rejects.toThrow(new UserError('sourceNotInstalled', { source: 'missing' }))
+  expect(store.settings().sources['single-two']).toBeUndefined()
 })

@@ -90,6 +90,12 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   description: Localized
   /** Read-only status facts derived from `deployment` (undefined while waiting for setup), keyed by field key. */
   facts?(deployment: Deployment | undefined): Record<string, Localized | string>
+  /**
+   * Whether a deployment may store several instances of this kind, each with its own project; kinds without it run once.
+   * A stored instance whose `kind` names a multi-instance kind can be created through `settings.save`.
+   * --- @ty.aicoding@ ---
+   */
+  multi?: true
   /** Validates stored and submitted configuration and fills defaults. */
   schema: z.ZodType<C>
   fields: FieldSpec[]

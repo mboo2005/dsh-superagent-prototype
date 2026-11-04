@@ -239,6 +239,8 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
   description: { zh: '智能体的 GitLab 账号；接收发给它的待办和已订阅 Issue、MR 的讨论，通过 glab 回复。',
     en: 'The agent\'s GitLab account; receives its to-dos and discussion on subscribed Issues and MRs, and replies through glab.' },
   schema: GitlabConfigSchema,
+  // One GitLab server can serve several projects; each stored instance names one.
+  multi: true,
   fields: [
     { key: 'url', type: 'text', label: { zh: 'GitLab 地址', en: 'GitLab URL' },
       hint: { zh: '公司自建实例的地址，例如 https://gitlab.example.com；这里也决定 glab 用哪个 hostname。', en: 'The self-hosted instance URL, such as https://gitlab.example.com; it also selects the hostname glab uses.' } },
