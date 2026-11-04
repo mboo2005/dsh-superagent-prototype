@@ -51,13 +51,13 @@ All calls use the configured CLI and hostname, and only the Source's project. To
 
 ## Worker delivery
 
-A Worker decides per project which CLI to use: `gh` for a GitHub repository and `glab` for a GitLab project, as the Worker prompt and the GitLab skill say. `DSH_SUPERAGENT_GITLAB_HOST` is the value `glab --hostname` takes; the project path is `DSH_SUPERAGENT_GITLAB_PROJECT`. When the deployment names a GitLab project, the execution environment writes a `glab` shim that runs the project's configured `cli` and clears any inherited `GITLAB_TOKEN`, so a Worker uses exactly the agent's `glab` login. It also configures the deployment's GitLab host in the worker gitconfig with that CLI as the credential helper, the way it configures `github.com` with `gh`.
+A worker decides per project which CLI to use: `gh` for a GitHub repository and `glab` for a GitLab project, as the worker prompt and the GitLab skill say. `DSH_SUPERAGENT_GITLAB_HOST` is the value `glab --hostname` takes; the project path is `DSH_SUPERAGENT_GITLAB_PROJECT`. When the deployment names a GitLab project, the execution environment writes a `glab` shim that runs the project's configured `cli` and clears any inherited `GITLAB_TOKEN`, so a worker uses exactly the agent's `glab` login. It also configures the deployment's GitLab host in the worker gitconfig with that CLI as the credential helper, the way it configures `github.com` with `gh`.
 
-A Worker reports an open Merge Request with the same `pr_number` argument as a pull request. The Executor reads that number through the ticket's Source candidates, most likely first, and claims the first change that accepts it, so an MR opened from a GitLab ticket is bound even when the ticket started on Feishu or GitHub. A ticket that follows `gitlab:mr:<iid>` shows the MR's IID as `pr_number`, and the GitLab poll observes the MRs of open tickets so a merge or close ends the ticket even when no note arrives.
+A worker reports an open Merge Request with the same `pr_number` argument as a pull request. The Executor reads that number through the ticket's Source candidates, most likely first, and claims the first change that accepts it, so an MR opened from a GitLab ticket is bound even when the ticket started on Feishu or GitHub. A ticket that follows `gitlab:mr:<iid>` shows the MR's IID as `pr_number`, and the GitLab poll observes the MRs of open tickets so a merge or close ends the ticket even when no note arrives.
 
 ## Limitations of this slice
 
-The Source covers ingestion, admission context, replies, health, merge request lifecycle and worker delivery. These parts still assume GitHub:
+The Source covers ingestion, admission context, replies, health, merge request lifecycle and worker delivery. Remaining limitations:
 
 - Setup resolves the deployment from the GitHub Source; a GitLab-only installation does not start yet. Enabling both works because the GitHub setup remains the deployment, and the GitLab Source then adds the GitLab project to it.
 - `orchestrator_read` has no `gitlab/…` pages; discussion reaches assessments through the Source's Thread context instead.
