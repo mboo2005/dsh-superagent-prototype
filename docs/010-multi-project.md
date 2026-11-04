@@ -57,7 +57,7 @@ The instance model, the deployment and the change lifecycle are the same body of
 | Health | `src/sources/registry.ts` (`healthEntries`), `src/sources/host.ts` (`health`) | Health entries are keyed per instance (`gitlab-web`), not per kind; two project instances no longer overwrite each other |
 | Deployment | `src/deployment.ts` (`Deployment`, `SETUP_FIELDS`, `workerProbe`), `src/app/setup.ts` (`checkAccounts`), `src/setup.ts` | `Deployment.projects` map; a project's host = `{ kind, url, cli, login, commitEmail, webUrl }`; per-project push probe and token check |
 | Worker environment | `src/infra/environment.ts` (`writeEnvironment`, `WORKER_COMMANDS`, credential helpers), `src/sources/gitlab.ts` (`environment.values`) | Helper for `credential.https://<gitlab host>` (the GitHub one stays), `glab` shim when the CLI is used, variables `DSH_SUPERAGENT_PROJECT`, `DSH_SUPERAGENT_GITLAB_URL`, `_ACCOUNT`, `_COMMIT_EMAIL` |
-| Change lifecycle | `src/sources/github-pull.ts` (`agentPull`, `pullEndNotices`), `src/kv.ts` (`github-*` keys) | Kind-neutral `claimChange`/`readChange`/`endNotice` hooks: a GitLab project claims by `source_branch` + author and stores the MR `iid` in the existing `pr_number`; cursors and link caches become per instance |
+| Change lifecycle | `src/sources/change.ts` (new), `src/sources/github-pull.ts`, `src/kv.ts` (`github-*` keys) | Kind-neutral `claimChange`/`observeChange`/`endNotices` behind a `ChangeHost`: a GitLab project claims by `source_branch` + author and stores the MR `iid` where a Ticket already stores `pr_number`; cursors and link caches become per instance |
 | Orchestrator tools and prompts | `src/app/resources.ts` (`github/…` reader via `src/sources/github-read.ts`), `skills/dsh-superagent-gitlab` (new), `prompts/*` | The resource reader picks the project's host instead of always calling `readGithub`; a GitLab project gets issue/MR/note resources and a matching skill; the GitHub wording in the orchestrator and worker prompts becomes host-neutral with a short per-kind note |
 | Policy | `src/policy.ts`, `src/app/views/*` | Policy parts keyed by instance id; form fields from the kind; a GitLab project's admission table is the same shape |
 | Panel | `src/client/source.tsx`, `src/app/views/settings.ts` | Server card edits the `gitlab` instance; project cards add/remove with `project` and are gated on a token; per-project health and last-poll rows |
@@ -113,16 +113,28 @@ Estimates are for one engineer who knows this codebase, in dev-days. The GitHub 
 
 **Total: about 32–44 dev-days**, or five to seven weeks for one engineer. [009](009-gitlab-support.md) estimates 26–34 dev-days for GitLab support alone; the first three phases overlap with it by roughly a week to ten days, so doing both as one program costs about 40–50 dev-days rather than the sum. A useful cut is A+B+C first: one GitLab project working end to end, soaked on the real instance, before D turns it into five.
 
-## Decisions the owner still has to make
+## Decisions (settled 2026-11-04)
 
-1. **Token.** Does the deployment host run `glab auth login` once (simplest, mirrors `gh`), or does it read a token file / environment variable that setup validates? Recommended: token file (mode 600) as the source of truth, `glab` used when present. Either way the token needs `api`, `read_repository` and `write_repository` scopes.
-2. **Is `glab` installed on the host?** If not, every GitLab operation goes through REST, the `glab` shim is unnecessary, and the worker's git credentials come from the token file directly.
-3. **Is the company certificate trusted on the host?** Self-hosted instances often use an internal CA; if git or Node reject it, the deployment needs a CA bundle setting (`GIT_SSL_CAINFO`/`SSL_CERT_FILE`) rather than `-c http.sslVerify=false`.
-4. **Do the four-five projects share one namespace and one token?** A group-level token with Developer access on all of them is one setup; separate tokens per project is more isolation but more configuration.
-5. **How much GitLab surface for v1?** Recommended: issues + merge requests + MR discussions. Pipelines, approvals and MR-approval rules can come after the soak.
-6. **Mixed or GitLab-only?** The design allows both kinds in one deployment; confirm the owner's deployment will be GitLab-only for now, so the GitHub wording in prompts can be generalized gradually instead of rewritten at once.
-7. **Review policy on GitLab.** No bot reviewers exist there; the review sections of the prompts (three automated rounds, credit trailers) need per-kind wording, or a documented "human review only" mode.
-8. **Project count.** 4–5 is the target; the polling design (one interval per project) scales to a few dozen but the rate limit is the floor. Confirm no large growth is planned.
+The owner approved this direction and answered the token question; the rest take the recommended defaults, recorded here as the assumptions this work proceeds on.
+
+1. **Token: a token file.** A file readable only by the deployment account is the source of truth; setup checks its scopes and refuses a world-readable file. `glab` is used when present and never required. The token needs `api`, `read_repository` and `write_repository`.
+2. **`glab` is optional.** Every operation has a REST path, so a host without `glab` loses no behavior; the worker's git credentials come from the token file through the credential helper.
+3. **Internal CA is configurable.** Setup accepts a CA bundle path and exports `GIT_SSL_CAINFO`/`SSL_CERT_FILE` for git and the REST client; disabling verification is not offered.
+4. **One token may serve several projects.** The v1 assumption is one group-level token with Developer access on the four-five projects; per-project tokens are a later option, so configuration keeps the token per server, not per project.
+5. **v1 GitLab surface**: issues, merge requests and MR discussions. Pipelines, approvals and approval rules wait for the soak.
+6. **A GitLab-only deployment is the first target.** The kinds can be mixed, but prompts and skills get GitLab wording when the kind is active rather than one shared compromise.
+7. **Review is human-only on GitLab** until an equivalent reviewer exists; the three-round rule becomes a GitHub-only rule, documented per kind.
+8. **Four-five projects.** Polling is one interval per project; that scales to a few dozen, and the instance rate limit is the floor.
+
+## Implementation status
+
+Phase A (the kind-neutral change hooks) is implemented on this branch; phases B–E are not.
+
+- `src/sources/change.ts` owns what was GitHub-specific: `changesOf`/`changeOf`, `claimChange`, `observeChange`, and `endNotices`. A kind supplies a `ChangeHost` (its thread prefix, the word it uses for a change, its account, its repository, its Thread facts, and its link).
+- `SourceKind.change` and `SourceRegistry.change(source, deployment)` expose that adapter, and the runtime's end-of-ticket notice loop asks the registry instead of calling GitHub helpers, so a second code host needs no runtime change.
+- `src/sources/github-pull.ts` is now the GitHub adapter of the same lifecycle and keeps its external helpers and notice IDs.
+
+Remaining phases need, besides the work itself, a reachable self-hosted GitLab instance and a token file to verify against: phases B–E touch `src/app/setup.ts`, `src/deployment.ts`, `src/infra/environment.ts` and the panel, and their setup checks are keyed to `github` and `feishu` today.
 
 ## Risks
 
