@@ -14,7 +14,8 @@ export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, 
   const kind = sources.kind(instance.kind)
   const starting: Health = { state: 'starting', detail: '' }
   const parts = (kind?.health ?? []).map(name => {
-    const entry = health[name]
+    // A project instance reports into its own entry; that entry appears once the project starts reporting.
+    const entry = instance.id === instance.kind ? health[name] : health[`${name}:${instance.id}`]
     return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? starting : entry) }
   })
   return { id: instance.id, title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }

@@ -166,7 +166,8 @@ export class Runtime extends Service implements SourceHost {
           const order = [sourceTrigger(runtime, ticket)?.source, ...followed, 'github', 'gitlab'].filter((source): source is string => !!source)
           return [...new Set(order)].flatMap(source => {
             const host = sources.change(source, setup.deployment)
-            return host ? [{ source, host, context: runtime.context({ kind: source, health: [source] }) }] : []
+            const kind = sources.kindOf(source)
+            return host && kind ? [{ source, host, context: runtime.context({ kind: kind.kind, health: kind.health }, source) }] : []
           })
         },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
@@ -181,7 +182,9 @@ export class Runtime extends Service implements SourceHost {
   get health(): Readonly<Record<string, Health>> { return this.board.all }
   /** Aborted when dsh-superagent stops or loses its state directory lock, cancelling running reads and subprocesses. */
   get lifetime(): AbortSignal { return this.stopped.signal }
-  context(kind: { kind: string; health: readonly string[] }): SourceContext { return sourceContextOf(this.sourceDeps, kind) }
+  context(kind: { kind: string; health: readonly string[] }, instance?: string): SourceContext {
+    return sourceContextOf(this.sourceDeps, kind, instance)
+  }
   /** Resolved deployment; throws while waiting for setup (`!configured()`). */
   get deployment(): Deployment { return this.setup.deployment }
   configured(): boolean { return this.setup.configured() }

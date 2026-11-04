@@ -35,6 +35,15 @@ describe('GitLab configuration', () => {
       DSH_SUPERAGENT_GITLAB_PROJECT: 'group/sub/project', DSH_SUPERAGENT_GITLAB_ACCOUNT: 'agent',
       DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL: 'agent@users.noreply.gitlab.example.com' })
   })
+  it('exposes the merge request of the trigger\'s own project instance only', () => {
+    const values = gitlabKind.environment!.values
+    const trigger = (source: string, threadSource: string) => ({ source, threads: [{ source: threadSource, id: 'mr:1' }],
+      meta: { iid: 1, kind: 'mr' } } as unknown as Parameters<typeof values>[0]['trigger'])
+    expect(values({ deployment: testDeployment(), config: config(), trigger: trigger('gitlab-two', 'gitlab-two') }))
+      .toMatchObject({ DSH_SUPERAGENT_GITLAB_IID: '1', DSH_SUPERAGENT_GITLAB_KIND: 'mr' })
+    expect(values({ deployment: testDeployment(), config: config(), trigger: trigger('gitlab', 'gitlab-two') }))
+      .toMatchObject({ DSH_SUPERAGENT_GITLAB_IID: '', DSH_SUPERAGENT_GITLAB_KIND: '' })
+  })
   it('describes the kind as a Source peer with its own project path', () => {
     expect(gitlabKind.kind).toBe('gitlab')
     expect(gitlabKind.health).toEqual(['gitlab'])
@@ -46,6 +55,12 @@ describe('GitLab configuration', () => {
 })
 
 describe('GitLab triggers', () => {
+  it('attributes a trigger to the project instance its target belongs to', () => {
+    const target = { kind: 'issue' as const, iid: 12, project: 'group/two', cli: 'glab', host: 'gitlab.example.com', source: 'gitlab-two' }
+    const trigger = noteTrigger(note(7, '@agent please look'), target, config())
+    expect(trigger).toMatchObject({ source: 'gitlab-two', threads: [{ source: 'gitlab-two', id: 'issue:12' }],
+      actor: { source: 'gitlab-two', id: 'alice' }, channel: { source: 'gitlab-two' } })
+  })
   it('turns a note on an issue into a mention trigger with a GitLab channel address', () => {
     const trigger = noteTrigger(note(7, '@agent please look'), { kind: 'issue', iid: 12, project: 'group/project', cli: 'glab',
       host: 'gitlab.example.com' }, config({ project: 'group/project' }))
@@ -144,6 +159,19 @@ describe('GitLab polling', () => {
     await pollRound(ctx)
     expect(receive).toHaveBeenCalledTimes(1)
     expect(receive.mock.calls[0]![0]).toMatchObject({ text: 'Do it', meta: { kind: 'issue', iid: 4 } })
+  })
+  it('polls over its own project instance\'s configuration and subscriptions', async () => {
+    const run = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify([note(9, 'first')]))
+    const receive = vi.fn()
+    const configOf = vi.fn(() => config())
+    const subscribed = vi.fn(() => [thread('issue:12', { gitlabNoteId: 0 })])
+    const ctx = context(config(), { instance: 'gitlab-two', commands: { run } as unknown as SourceContext['commands'],
+      receive: receive as unknown as SourceContext['receive'], config: configOf as unknown as SourceContext['config'],
+      threads: { subscribed, patch: vi.fn(), describe: vi.fn(), get: vi.fn() } })
+    await pollRound(ctx)
+    expect(configOf).toHaveBeenCalledWith('gitlab-two')
+    expect(subscribed).toHaveBeenCalledWith('gitlab-two')
+    expect(receive.mock.calls[0]![0]).toMatchObject({ source: 'gitlab-two', threads: [{ source: 'gitlab-two', id: 'issue:12' }] })
   })
 })
 

@@ -10,7 +10,7 @@ import { githubKind } from '../src/sources/github.ts'
 import { snapshot, threadSummary, ticketSummary, triggerView } from '../src/app/views/records.ts'
 import { basisFacts, ticketDetail } from '../src/app/views/tickets.ts'
 import { threadDetail } from '../src/app/views/threads.ts'
-import { droppedReplies, sourcesStatus } from '../src/app/views/sources.ts'
+import { droppedReplies, sourceHealth, sourcesStatus } from '../src/app/views/sources.ts'
 import { overview } from '../src/app/views/overview.ts'
 import { markdown, plain } from '../src/app/views/text.ts'
 import { policyHistory } from '../src/app/settings-history.ts'
@@ -112,6 +112,17 @@ it('states each Source by the first state that holds', () => {
     .toEqual({ feishu: 'setup', github: 'setup' })
 })
 
+it('reads the health of a project instance from its own entry, not its kind\'s', () => {
+  const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { 'github-two': { enabled: true, kind: 'github', config: {} } } }))
+  sources.register(githubKind)
+  const instance = { id: 'github-two', kind: 'github', enabled: true, config: {} }
+  // Until the project reports, it shows as starting even though its kind is ready.
+  expect(sourceHealth(sources, instance, { github: { state: 'ready', detail: 'kind' } }).health).toEqual([{ name: 'github', state: 'starting', detail: '' }])
+  expect(sourceHealth(sources, instance, { github: { state: 'ready', detail: 'kind' },
+    'github:github-two': { state: 'error', detail: 'project x' } }).health).toEqual([{ name: 'github', state: 'error', detail: 'project x' }])
+  expect(sourceHealth(sources, { ...instance, id: 'github' }, { github: { state: 'ready', detail: 'kind' } }).health)
+    .toEqual([{ name: 'github', state: 'ready', detail: 'kind' }])
+})
 it('follows the Ticket\'s stage: a blocked Ticket a person answered since is working, with no retry, note or turn end', () => {
   const host = views()
   const blocked = { state: 'blocked' as const, summary: 'Needs the design file', at: '2026-09-22T00:01:00Z' }
