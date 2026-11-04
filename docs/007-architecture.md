@@ -398,7 +398,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts`, `src/sources/gitlab.ts` and `src/sources/feishu.ts` are also the entries of the Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./gitlab-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with GitLab and Feishu disabled.
+`src/sources/github.ts`, `src/sources/gitlab.ts` and `src/sources/feishu.ts` are also the entries of the Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./gitlab-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the plugins, with GitLab and Feishu disabled.
 
 ## Tests
 

@@ -61,7 +61,9 @@ type Kind = 'issue' | 'mr'
 /** Where a GitLab thread lives: enough to read it and to post a reply without the stored configuration. */
 interface Place { kind: Kind; iid: number; project: string; cli: string; host: string; url?: string | undefined }
 
-const hostOf = (url: string): string => new URL(url).host
+const hostOf = (url: string): string => {
+  try { return new URL(url).host } catch { return '' }
+}
 const encoded = (project: string): string => encodeURIComponent(project)
 const segment = (kind: Kind): string => kind === 'mr' ? 'merge_requests' : 'issues'
 const threadId = (kind: Kind, iid: number): string => `${kind}:${iid}`
@@ -111,6 +113,7 @@ export function noteTrigger(note: GitlabNote, target: Place, config: GitlabConfi
 }
 /** Builds the Trigger for one pending to-do, or undefined for a target type this Source does not watch. */
 export function todoTrigger(todo: GitlabTodo, config: GitlabConfig): Trigger | undefined {
+  if (!['assigned', 'mentioned', 'directly_addressed'].includes(todo.action_name)) return undefined
   const kind: Kind | undefined = todo.target_type === 'MergeRequest' ? 'mr' : todo.target_type === 'Issue' ? 'issue' : undefined
   const todoTarget = todo.target
   const iid = todoTarget?.iid
@@ -159,11 +162,12 @@ export const gitlabThreadContext: ThreadContext<GitlabConfig> = {
 /** Posts a note with an embedded HTML marker so a retry does not duplicate the reply. */
 export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message: { id: string; channel: { address: Record<string, string> }; text: string }): Promise<'sent' | 'gone'> {
   const { kind, iid, project, cli, host: instance } = message.channel.address
-  if (!kind || !iid || !project || !cli || !instance) return 'gone'
-  const target: Place = { kind: kind === 'mr' ? 'mr' : 'issue', iid: Number(iid), project, cli, host: instance, url: message.channel.address.url }
+  const number = Number(iid)
+  if ((kind !== 'issue' && kind !== 'mr') || !Number.isInteger(number) || number <= 0 || !project || !cli || !instance) return 'gone'
+  const target: Place = { kind: kind === 'mr' ? 'mr' : 'issue', iid: number, project, cli, host: instance, url: message.channel.address.url }
   try {
     const marker = `<!-- dsh-superagent:${message.id} -->`
-    const existing = await apiAt(host.commands, target, notesPath(target), z.array(NoteSchema))
+    const existing = await apiAt(host.commands, target, notesPath(target, 'desc'), z.array(NoteSchema))
     if (existing.some(note => (note.body ?? '').includes(marker))) return 'sent'
     await host.commands.run(cli, ['api', '--hostname', instance, '--method', 'POST', `${subjectPath(target)}/notes`, '-f', `body=${message.text}\n\n${marker}`])
     return 'sent'

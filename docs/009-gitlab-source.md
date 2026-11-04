@@ -4,7 +4,7 @@ The GitLab Source watches one project on a company-hosted GitLab instance and tu
 
 ## What it receives
 
-- **To-dos** assigned to the agent account, by assignment or direct mention. A to-do is addressed to the agent directly, and must name an Issue or Merge Request.
+- **To-dos** assigned to the agent account, by assignment or a mention. A to-do is addressed to the agent directly, and must name an Issue or Merge Request.
 - **Notes** on an Issue or Merge Request whose Thread has a Ticket subscribed. A note is addressed when its text mentions the agent's username; every other note is context. Notes written by the agent and system notes are never received.
 
 A thread key is `gitlab:issue:<iid>` or `gitlab:mr:<iid>`. Issues and Merge Requests have separate IID sequences, so the kind is part of the key. `find` accepts `12`, `#12`, `!12`, and an Issue or Merge Request URL from any project.

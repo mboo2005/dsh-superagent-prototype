@@ -108,12 +108,24 @@ describe('GitLab polling', () => {
     expect(receive).toHaveBeenCalledTimes(1)
     expect(receive.mock.calls[0]![0]).toMatchObject({ text: 'new', threads: [{ source: 'gitlab', id: 'issue:12' }] })
   })
+  it('processes a newest-first page in chronological order', async () => {
+    const page = [note(5, 'newest', '2026-01-05T00:00:00.000Z'), note(4, 'older', '2026-01-04T00:00:00.000Z'),
+      note(3, 'old', '2026-01-03T00:00:00.000Z')]
+    const run = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify(page))
+    const receive = vi.fn()
+    await pollRound(context(config(), { commands: { run } as unknown as SourceContext['commands'],
+      receive: receive as unknown as SourceContext['receive'],
+      threads: { subscribed: () => [thread('issue:12', { gitlabNoteId: 3 })], patch: vi.fn(), describe: vi.fn(), get: vi.fn() } }))
+    expect(receive.mock.calls.map(call => call[0].text)).toEqual(['older', 'newest'])
+  })
   it('receives pending to-dos and skips the agent\'s own', async () => {
     const todos = [{ id: 1, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
       created_at: '2026-01-02T00:00:00.000Z' },
     { id: 2, author: { username: 'agent' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
       created_at: '2026-01-02T00:00:00.000Z' },
     { id: 3, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Commit', target: null,
+      created_at: '2026-01-02T00:00:00.000Z' },
+    { id: 4, author: { username: 'alice' }, action_name: 'build_failed', target_type: 'Issue', target: { iid: 4, title: 'Do it' },
       created_at: '2026-01-02T00:00:00.000Z' }]
     const run3 = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? JSON.stringify(todos) : '[]')
     const receive = vi.fn()
