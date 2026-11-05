@@ -12,6 +12,8 @@ import { gitlabProject } from '../deployment.ts'
 import { KV } from '../kv.ts'
 import { sameName } from '../infra/text.ts'
 import { health, sourceContext, type Health, type SourceContext } from './host.ts'
+// The agent's post prefix is shared with the GitHub Source, so one fixed value identifies the agent on either host.
+import { AGENT_PREFIX } from './github-trigger.ts'
 import { gitlabChange, pollTicketMrs } from './gitlab-change.ts'
 import type { ChannelLink, ChannelLinks, ContextMessage, ContextPart, ContextPartName, Localized, SourceKind, ThreadContext } from './kind.ts'
 import { cursorAt, pause, POLL_HORIZON_MS } from './poll.ts'
@@ -96,6 +98,22 @@ const mentioned = (text: string, account: string): boolean => {
   const escaped = account.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp(`(^|[^A-Za-z0-9_.-])@${escaped}(?![A-Za-z0-9_.-])`, 'i').test(text)
 }
+/** The hidden marker a note of `messageId` carries; `sendGitlab` matches it to avoid posting the same note twice. */
+export const noteMarker = (messageId: string): string => `<!-- dsh-superagent:${messageId} -->`
+/**
+ * True when a note body was written by the agent: it opens with the agent prefix, or carries the hidden reply marker
+ * written before the prefix existed.
+ * --- @ty.aicoding@1793873445064 ---
+ */
+export const agentNote = (body: string | null | undefined): boolean =>
+  (body ?? '').trimStart().startsWith(AGENT_PREFIX) || (body ?? '').includes('<!-- dsh-superagent:')
+/**
+ * True when a note is the agent's own posting under the account it shares with a person. A person's note from that same
+ * account carries no prefix, so it stays a person's request.
+ * --- @ty.aicoding@1793873445064 ---
+ */
+const authoredByAgent = (author: { username: string }, body: string | null | undefined, config: GitlabConfig): boolean =>
+  sameName(author.username, config.account) && agentNote(body)
 const at = (value: string): string => {
   const time = Date.parse(value)
   return Number.isFinite(time) ? new Date(time).toISOString() : value
@@ -110,7 +128,10 @@ async function apiAt<T>(commands: SourceContext['commands'], target: Place, path
   const raw = await commands.run(target.cli, ['api', '--hostname', target.host, path])
   return schema.parse(JSON.parse(raw))
 }
-/** Builds the Trigger for one note on an issue or merge request. */
+/**
+ * Builds the Trigger for one note on an issue or merge request.
+ * --- @ty.aicoding@1793873151183 ---
+ */
 export function noteTrigger(note: GitlabNote, target: Place, config: GitlabConfig): Trigger {
   const body = note.body ?? ''
   const edited = note.updated_at ?? note.created_at
@@ -118,7 +139,7 @@ export function noteTrigger(note: GitlabNote, target: Place, config: GitlabConfi
   return { id: key('gitlab-note', target.project, target.kind, String(target.iid), String(note.id), edited), source,
     threads: [{ source, id: threadId(target.kind, target.iid) }],
     actor: { source, id: note.author.username },
-    human: note.author.bot !== true && !sameName(note.author.username, config.account),
+    human: note.author.bot !== true && !authoredByAgent(note.author, body, config),
     ...mentioned(body, config.account) ? { addressed: 'mention' as const } : {},
     at: at(edited), text: body,
     channel: { source, thread: threadId(target.kind, target.iid), address: addressOf(target) },
@@ -126,7 +147,9 @@ export function noteTrigger(note: GitlabNote, target: Place, config: GitlabConfi
     meta: { kind: target.kind, iid: target.iid, project: target.project, noteId: note.id, author: note.author.username,
       ...target.kind === 'mr' ? { isPr: true as const, number: target.iid } : {} } }
 }
-/** Builds the Trigger for one pending to-do, or undefined for a target type this Source does not watch. */
+/** Builds the Trigger for one pending to-do, or undefined for a target type this Source does not watch.
+ * --- @ty.aicoding@1793873151183 ---
+ */
 export function todoTrigger(todo: GitlabTodo, config: GitlabConfig, source = SOURCE): Trigger | undefined {
   if (!['assigned', 'mentioned', 'directly_addressed'].includes(todo.action_name)) return undefined
   const kind: Kind | undefined = todo.target_type === 'MergeRequest' ? 'mr' : todo.target_type === 'Issue' ? 'issue' : undefined
@@ -139,7 +162,7 @@ export function todoTrigger(todo: GitlabTodo, config: GitlabConfig, source = SOU
   const target = place(kind, iid, config, url, source)
   return { id: key('gitlab-todo', config.project, kind, String(iid), String(todo.id)), source,
     threads: [{ source, id: threadId(kind, iid) }], actor: { source, id: todo.author.username },
-    human: todo.author.bot !== true && !sameName(todo.author.username, config.account),
+    human: todo.author.bot !== true && !authoredByAgent(todo.author, todo.body, config),
     addressed: todo.action_name === 'assigned' || todo.action_name === 'directly_addressed' ? 'direct' : 'mention',
     at: at(todo.created_at), text: todo.body?.trim() || todoTarget.title || '',
     channel: { source, thread: threadId(kind, iid), address: addressOf(target) }, url: todo.target_url ?? todoTarget.web_url ?? '',
@@ -153,7 +176,7 @@ const SWEEP_BACKFILL_MS = 24 * 3600_000
  * GitLab sends no to-do when a person assigns the account itself and none at all for an Issue nobody is assigned to, so the
  * sweep is how such an Issue reaches the Source. Assignment to the account (or review request) is a direct request; a mention
  * in the title or description is a mention; anything else relies on the Policy's admission table.
- * --- @ty.aicoding@ ---
+ * --- @ty.aicoding@1793873151183 ---
  */
 export function objectTrigger(object: GitlabObject, kind: Kind, config: GitlabConfig, source = SOURCE): Trigger {
   const target = place(kind, object.iid, config, object.web_url, source)
@@ -181,10 +204,15 @@ function subjectPath(target: Place): string {
 function notesPath(target: Place, order: 'asc' | 'desc' = 'asc'): string {
   return `${subjectPath(target)}/notes?sort=${order}&order_by=created_at&per_page=100`
 }
-/** Converts one GitLab note into the normalized message an assessment reads. */
-function contextMessage(note: GitlabNote, target: Place): ContextMessage {
+/**
+ * Converts one GitLab note into the normalized message an assessment reads. A note the agent wrote is marked as machine-written,
+ * like a bot's, so its own reply can never be read back as a person's new request.
+ * --- @ty.aicoding@1793873151183 ---
+ */
+function contextMessage(note: GitlabNote, target: Place, config?: GitlabConfig): ContextMessage {
+  const mine = !!config && authoredByAgent(note.author, note.body, config)
   return { id: String(note.id), from: note.author.username, at: at(note.updated_at ?? note.created_at), text: note.body ?? '',
-    ...note.author.bot === true ? { bot: true as const } : {}, ...note.web_url ? { url: note.web_url } : {} }
+    ...note.author.bot === true || mine ? { bot: true as const } : {}, ...note.web_url ? { url: note.web_url } : {} }
 }
 /** The discussion around a GitLab issue or merge request, read through the configured CLI. */
 export const gitlabThreadContext: ThreadContext<GitlabConfig> = {
@@ -198,11 +226,15 @@ export const gitlabThreadContext: ThreadContext<GitlabConfig> = {
     const body: Record<string, unknown> = { title: issue.title, description: issue.description ?? '', url: issue.web_url ?? '' }
     if (part === 'root') return { messages: [], body, status: 'ok' }
     const notes = await apiAt(commands, target, notesPath(target), z.array(NoteSchema))
-    const messages = notes.map(note => contextMessage(note, target))
+    const messages = notes.map(note => contextMessage(note, target, config))
     return { messages, body, status: 'ok' }
   },
 }
-/** Posts a note with an embedded HTML marker so a retry does not duplicate the reply. */
+/**
+ * Posts a note with the agent prefix and an embedded HTML marker, so a retry does not duplicate the reply and the Source can
+ * recognize its own writing on an account a person also uses.
+ * --- @ty.aicoding@1793873151183 ---
+ */
 export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message: { id: string; channel: { source?: string; address: Record<string, string> }; text: string }): Promise<'sent' | 'gone'> {
   const { kind, iid, project, cli, host: instance } = message.channel.address
   const number = Number(iid)
@@ -210,10 +242,11 @@ export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message:
   const target: Place = { kind: kind === 'mr' ? 'mr' : 'issue', iid: number, project, cli, host: instance,
     source: message.channel.source ?? SOURCE, url: message.channel.address.url }
   try {
-    const marker = `<!-- dsh-superagent:${message.id} -->`
+    const marker = noteMarker(message.id)
     const existing = await apiAt(host.commands, target, notesPath(target, 'desc'), z.array(NoteSchema))
     if (existing.some(note => (note.body ?? '').includes(marker))) return 'sent'
-    await host.commands.run(cli, ['api', '--hostname', instance, '--method', 'POST', `${subjectPath(target)}/notes`, '-f', `body=${message.text}\n\n${marker}`])
+    await host.commands.run(cli, ['api', '--hostname', instance, '--method', 'POST', `${subjectPath(target)}/notes`, '-f',
+      `body=${AGENT_PREFIX} ${message.text}\n\n${marker}`])
     return 'sent'
   } catch (error) {
     if (error instanceof CliError && (error.code === 404 || error.code === 410)) return 'gone'
@@ -226,7 +259,12 @@ export function gitlabLink(address: Record<string, string>, _links: ChannelLinks
   const number = `${address.kind === 'mr' ? '!' : '#'}${address.iid ?? ''}`
   return { url: address.url ?? '', label: { zh: `GitLab ${label} ${number}`, en: `GitLab ${label} ${number}` } }
 }
-/** Reads notes on a subscribed thread and ingests the ones that arrived since the last poll. */
+/**
+ * Reads notes on a subscribed thread and ingests the ones that arrived since the last poll. Only a note written by the agent
+ * under the shared account carries its prefix; every other note from that account is the person's and is received, so a
+ * person who also signs the Source in as themselves can still hand work back in a comment.
+ * --- @ty.aicoding@1793873151183 ---
+ */
 async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Thread): Promise<void> {
   const parsed = parseThread(thread.ref.id)
   if (!parsed) return
@@ -245,7 +283,7 @@ async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Threa
   for (const note of notes) {
     if (note.id <= cursor) continue
     latest = Math.max(latest, note.id)
-    if (note.system || sameName(note.author.username, config.account)) continue
+    if (note.system || authoredByAgent(note.author, note.body, config)) continue
     await ctx.receive(noteTrigger(note, target, config))
   }
   if (latest !== cursor) ctx.threads.patch(thread.key, { gitlabNoteId: latest })
@@ -256,7 +294,7 @@ async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Threa
  * cursor so a stream of merge request updates cannot hide a later Issue, the first sweep of a kind looks back
  * `SWEEP_BACKFILL_MS`, and objects a pending to-do already reported in this round are skipped so one request does not arrive
  * twice. Repeated items are harmless because Trigger IDs are deterministic and Intake stores the first copy.
- * --- @ty.aicoding@ ---
+ * --- @ty.aicoding@1793873151183 ---
  */
 async function pollObjects(ctx: SourceContext, config: GitlabConfig, noticed: ReadonlySet<string>): Promise<void> {
   const kinds: Kind[] = [...config.observeIssues ? ['issue' as const] : [], ...config.observeMerges ? ['mr' as const] : []]

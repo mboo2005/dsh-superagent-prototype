@@ -83,10 +83,17 @@ describe('GitLab triggers', () => {
     expect(trigger.human).toBe(true)
     expect(trigger.channel?.address).toEqual({ kind: 'issue', iid: '12', project: 'group/project', cli: 'glab', host: 'gitlab.example.com' })
   })
+  /**
+   * The shared account tells the agent's own notes apart by the `[aibot]` prefix or the hidden reply marker, so a person's
+   * note from it still counts while a reply written before the prefix existed is still skipped.
+   * --- @ty.aicoding@1793877388111 ---
+   */
   it('does not treat the agent\'s own notes or bots as human', () => {
     const place = { kind: 'mr' as const, iid: 3, project: 'group/project', cli: 'glab', host: 'gitlab.example.com' }
-    expect(noteTrigger(note(1, 'mine', undefined, { username: 'agent' }), place, config()).human).toBe(false)
+    expect(noteTrigger(note(1, '[aibot] mine', undefined, { username: 'agent' }), place, config()).human).toBe(false)
     expect(noteTrigger(note(2, 'ci', undefined, { username: 'ci', bot: true }), place, config()).human).toBe(false)
+    expect(noteTrigger(note(3, 'please fix this', undefined, { username: 'agent' }), place, config()).human).toBe(true)
+    expect(noteTrigger(note(4, 'old\n\n<!-- dsh-superagent:m9 -->', undefined, { username: 'agent' }), place, config()).human).toBe(false)
   })
   it('turns an assigned to-do into a direct trigger and ignores other target types', () => {
     const todo = { id: 5, author: { username: 'alice' }, action_name: 'assigned', target_type: 'MergeRequest',
@@ -144,8 +151,12 @@ describe('GitLab polling', () => {
       threads: { subscribed: () => [thread('issue:12', { gitlabNoteId: 0 })], patch, describe: vi.fn(), get: vi.fn() } }))
     expect(receive).toHaveBeenCalledTimes(1)
   })
+  /**
+   * The cursor still advances past a note the agent wrote under the shared account, which its prefix identifies.
+   * --- @ty.aicoding@1793877388111 ---
+   */
   it('receives only notes newer than the cursor, skipping the agent and system notes', async () => {
-    const latest = [note(2, 'old', '2026-01-03T00:00:00.000Z'), note(3, 'mine', '2026-01-04T00:00:00.000Z', { username: 'agent' }),
+    const latest = [note(2, 'old', '2026-01-03T00:00:00.000Z'), note(3, '[aibot] mine', '2026-01-04T00:00:00.000Z', { username: 'agent' }),
       { ...note(4, 'system', '2026-01-04T00:00:00.000Z'), system: true }, note(5, 'new', '2026-01-05T00:00:00.000Z')]
     const run2 = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') || isSweep(args[3] ?? '') ? '[]' : JSON.stringify(latest))
     const receive = vi.fn()
@@ -170,7 +181,8 @@ describe('GitLab polling', () => {
   it('receives pending to-dos and skips the agent\'s own', async () => {
     const todos = [{ id: 1, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it', web_url: 'https://gitlab.example.com/group/sub/project/-/issues/4' },
       created_at: '2026-01-02T00:00:00.000Z' },
-    { id: 2, author: { username: 'agent' }, action_name: 'assigned', target_type: 'Issue', target: { iid: 4, title: 'Do it', web_url: 'https://gitlab.example.com/group/sub/project/-/issues/4' },
+    { id: 2, author: { username: 'agent' }, action_name: 'assigned', target_type: 'Issue', body: '[aibot] done',
+      target: { iid: 4, title: 'Do it', web_url: 'https://gitlab.example.com/group/sub/project/-/issues/4' },
       created_at: '2026-01-02T00:00:00.000Z' },
     { id: 3, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Commit', target: null,
       created_at: '2026-01-02T00:00:00.000Z' },
@@ -264,7 +276,7 @@ describe('GitLab channel', () => {
     const post = vi.fn(async (_program: string, args: string[]) => args.includes('--method') ? '{}' : '[]')
     expect(await sendGitlab({ commands: { run: post } as unknown as SourceContext['commands'] }, message)).toBe('sent')
     const sent = post.mock.calls.find(call => call[1].includes('--method'))!
-    expect(sent[1]).toContain('body=hello\n\n<!-- dsh-superagent:m1 -->')
+    expect(sent[1]).toContain('body=[aibot] hello\n\n<!-- dsh-superagent:m1 -->')
   })
   it('reports a deleted target as gone', async () => {
     const run = vi.fn(async () => { throw new CliError('not found', 404) })
