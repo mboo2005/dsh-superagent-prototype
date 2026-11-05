@@ -727,6 +727,7 @@ const TEXT = {
   'userError.promptPlaceholders': ['「{part}」的模板必须保留占位符 {placeholders}，由系统填入内容。', USER_ERRORS.promptPlaceholders[1]],
   'userError.promptPartEmpty': ['「{part}」段落不能为空；要沿用内置文本，请恢复此段默认内容。', USER_ERRORS.promptPartEmpty[1]],
   'userError.sourceNotInstalled': ['{source} 来源的插件没有安装。', USER_ERRORS.sourceNotInstalled[1]],
+  'userError.sourceNotMulti': ['{source} 来源不支持多个实例。', USER_ERRORS.sourceNotMulti[1]],
   'userError.noLabels': ['这个来源没有可以刷新的名称。', USER_ERRORS.noLabels[1]],
   'userError.nothingToSync': ['{source} 来源上的策略没有指定从哪里同步，或者这个来源已关闭或在等待部署检查。', USER_ERRORS.nothingToSync[1]],
   // Setup problems and health codes; English reuses the host's own text read by the log and main Session

@@ -60,7 +60,8 @@ The instance model, the deployment and the change lifecycle are the same body of
 | Change lifecycle | `src/sources/change.ts` (new), `src/sources/github-pull.ts`, `src/kv.ts` (`github-*` keys) | Kind-neutral `claimChange`/`observeChange`/`endNotices` behind a `ChangeHost`: a GitLab project claims by `source_branch` + author and stores the MR `iid` where a Ticket already stores `pr_number`; cursors and link caches become per instance. The kind's `change(deployment, config, instance)` runs per instance, so each project's adapter has its own repository, thread prefix and links |
 | Orchestrator tools and prompts | `src/app/resources.ts` (`github/…` reader via `src/sources/github-read.ts`), `skills/dsh-superagent-gitlab` (new), `prompts/*` | The resource reader picks the project's host instead of always calling `readGithub`; a GitLab project gets issue/MR/note resources and a matching skill; the GitHub wording in the orchestrator and worker prompts becomes host-neutral with a short per-kind note |
 | Policy | `src/policy.ts`, `src/app/views/*` | Policy parts keyed by instance id; form fields from the kind; a GitLab project's admission table is the same shape |
-| Panel | `src/client/source.tsx`, `src/app/views/settings.ts` | Server card edits the `gitlab` instance; project cards add/remove with `project` and are gated on a token; per-project health and last-poll rows. **Add/remove is phase E and still missing**: today an instance must already exist in settings (`PUT settings/source:<id>` rejects an unknown block), so the panel shows one card per stored instance but cannot create one |
+| Panel | `src/client/source.tsx`, `src/app/views/settings.ts` | Server card edits the `gitlab` instance; project cards add/remove with `project` and are gated on a token; per-project health and last-poll rows. **Add/remove in the panel is phase E and still missing**: a project instance is created by saving a new `source:<id>` block that names `kind: "gitlab"` (see “Creating a project” below), and the panel then edits it like any stored instance. |
+| Instance creation | `src/sources/kind.ts` (`SourceKind.multi`), `src/app/settings.ts` (`save`), `src/app/http.ts` (`PUT settings/:block`) | `PUT settings/source:<id>` accepts a block that does not exist yet when the value's `kind` names an installed kind declaring `multi: true`; other unknown source blocks are refused (`sourceNotInstalled`, `sourceNotMulti`). The block's revision starts at 0. |
 | Documentation | `SETUP.md`, `docs/006-deployment.md`, `docs/003-execution.md`, `docs/008-cookbook.md` | A GitLab deployment walkthrough, project/env variables, and the credential/token model |
 
 ## Mapping GitHub to GitLab
@@ -87,8 +88,20 @@ This is the part that makes 4–5 projects one deployment rather than 4–5 depl
 1. **Stored instances gain `kind`.** `SourceInstanceSchema` becomes `{ enabled, kind?, config }`; a stored instance without `kind` keeps today's meaning (its id is the kind id), so `github` and `feishu` settings stay valid. `SourceRegistry.resolve(kind, stored)` stops forcing `id: kind.kind` and keeps the stored id.
 2. **Health, policy, state and variables key on the instance id**, never on the kind: `health` entries are claimed per instance; `policy.sources[instanceId]`; `github-since:<instance>` / `github-stream:<instance>` / `github-cursor:<instance>` style state keys; environment values come from the project's host.
 3. **The stored instance is the project.** There is no second project table: `SourceRegistry.instance(id)` returns the project (its config merged over the kind's base config), thread keys are `<instance>:<threadId>`, and a ticket's change host comes from `change(trigger.source, deployment)`, which passes that instance's config and id to `kind.change`. The kind instance (`gitlab`) still holds server facts and may own one project itself; it produces no threads without a `project`.
-4. **The panel lists projects**, not kinds: one card per stored instance, already the case for the Sources settings and status views. Add/remove of a project instance is phase E; removing a project should pause its threads instead of deleting them, and its stored Policy part is kept, like other uninstalled sources.
+4. **The panel lists projects**, not kinds: one card per stored instance, already the case for the Sources settings and status views. A project is added by saving a new `source:<id>` block through the settings API; panel add/remove is phase E. Removing a project should pause its threads instead of deleting them, and its stored Policy part is kept, like other uninstalled sources.
 5. **Setup probes run per project.** Each project reports its own token/push/API check, so one unreachable project does not hide the other four.
+
+## Creating a project
+
+The settings API creates a project by saving a block whose id does not exist yet. The value names the installed kind and only the fields that differ from the `gitlab` instance; its revision is `0`, like any block that was never saved.
+
+```sh
+api=http://127.0.0.1:3082/orchestrator/api
+curl -s -X PUT -H 'x-orchestrator-request: 1' -H 'content-type: application/json' $api/settings/source:gitlab-web \
+  -d '{"value": {"enabled": true, "kind": "gitlab", "config": {"project": "web/frontend"}}, "revision": 0}'
+```
+
+That adds a project; it starts with an empty Policy part, so its senders must be allowed before it accepts work. Only kinds declaring `multi: true` (today: `gitlab`) can gain instances this way, and the API does not remove one yet — removal is part of phase E.
 
 ## Workspace question
 

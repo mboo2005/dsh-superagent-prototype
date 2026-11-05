@@ -153,7 +153,13 @@ export class Settings {
     const kind = block.startsWith('source:') ? 'source' : block
     if (!(kind in BLOCKS)) throw new UserError('unknownBlock', { block })
     const rules = BLOCKS[kind as keyof typeof BLOCKS]
-    if (kind === 'source' && !sources.kind(id)) throw new UserError('sourceNotInstalled', { source: id })
+    if (kind === 'source' && !sources.kindOf(id)) {
+      // An unknown block may create one more project instance, but only of a kind that supports several.
+      const declared = value && typeof value === 'object' ? (value as { kind?: unknown }).kind : undefined
+      const target = typeof declared === 'string' ? sources.kind(declared) : undefined
+      if (!target) throw new UserError('sourceNotInstalled', { source: typeof declared === 'string' ? declared : id })
+      if (!target.multi) throw new UserError('sourceNotMulti', { source: target.kind })
+    }
     const parsed = rules.parse(value, sources, id)
     const current = store.settings()
     const candidate = rules.merge(current, parsed, id)
