@@ -93,18 +93,22 @@ export class SourceRegistry implements SourceScope {
    */
   kindOf(id: string, settings = this.settings()): SourceKind | undefined { return this.resolve(id, settings)?.kind }
   /**
-   * Validates one submitted instance. A `kind` other than the instance id stores a project instance: its submitted fields
+   * Validates one submitted instance. A kind other than the instance id stores a project instance: its submitted fields
    * are validated over the kind instance's configuration and only those fields are kept, so the rest keeps inheriting.
+   * An existing project instance may omit `kind` (the panel's block value does), so its stored kind is resolved the same
+   * way `kindOf` and `instance` resolve it.
    * --- @ty.aicoding@ ---
    */
   validate(id: string, value: { enabled: boolean; kind?: string; config: unknown }): { enabled: boolean; kind?: string; config: Record<string, unknown> } {
-    const kind = this.kinds.get(value.kind ?? id)
-    if (!kind) throw new Error(`Source kind not installed: ${value.kind ?? id}`)
-    if (!value.kind || value.kind === id) return { enabled: value.enabled, config: kind.schema.parse(value.config) }
-    const base = this.settings().sources[value.kind]?.config ?? {}
+    const settings = this.settings()
+    const kindId = value.kind ?? settings.sources[id]?.kind ?? id
+    const kind = this.kinds.get(kindId)
+    if (!kind) throw new Error(`Source kind not installed: ${kindId}`)
+    if (kindId === id) return { enabled: value.enabled, config: kind.schema.parse(value.config) }
+    const base = settings.sources[kindId]?.config ?? {}
     const fields = Object.keys(value.config as Record<string, unknown>)
     const parsed = kind.schema.parse({ ...base, ...value.config as Record<string, unknown> }) as Record<string, unknown>
-    return { enabled: value.enabled, kind: value.kind, config: Object.fromEntries(fields.map(field => [field, parsed[field]])) }
+    return { enabled: value.enabled, kind: kindId, config: Object.fromEntries(fields.map(field => [field, parsed[field]])) }
   }
   /** Validates each Source's part of a submitted Policy against its kind; policy parts for uninstalled Source kinds are kept as stored. */
   validatePolicy(parts: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown> & { allowed: { id: string; name?: string }[] }> {
