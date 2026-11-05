@@ -52,9 +52,14 @@ export function sourcesStatus(host: ViewHost, health: HealthMap, setup: SetupSta
     const { health: parts, ...named } = sourceHealth(sources, instance, health)
     const problem = problemOf(instance.id, setup)
     return { ...named, installed: instance.installed, enabled: instance.enabled, state: sourceState(instance, parts, setup), health: parts,
-      ...problem ? { problem } : {}, stats: stats[instance.id] ?? { received: 0, filtered: 0, lastAt: '' }, filtered: filtered(instance.id),
-      dropped: dropped.filter(item => item.channel.source === instance.id) }
+      ...problem ? { problem } : {}, ...lastCheck(parts), stats: stats[instance.id] ?? { received: 0, filtered: 0, lastAt: '' },
+      filtered: filtered(instance.id), dropped: dropped.filter(item => item.channel.source === instance.id) }
   })
+}
+/** Newest moment any of a Source's parts last reported, so an idle Source still shows that it is polling. */
+function lastCheck(parts: { at?: string }[]): { checkedAt?: string } {
+  const times = parts.flatMap(part => part.at ? [part.at] : [])
+  return times.length ? { checkedAt: times.reduce((latest, at) => at > latest ? at : latest) } : {}
 }
 export type SourceStatusView = ReturnType<typeof sourcesStatus>[number]
 /** Replies dropped in the last 24 hours, enriched with their associated ticket and thread. */

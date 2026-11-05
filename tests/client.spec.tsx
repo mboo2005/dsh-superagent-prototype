@@ -78,6 +78,29 @@ it('reports a Session missing from the catalog in the interface language', async
   view.dispose()
 })
 
+it('shows on each Source when it last checked, so an idle Source does not look stopped', async () => {
+  const at = new Date().toISOString()
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const path = new URL(url, 'http://127.0.0.1').pathname.replace('/orchestrator/api/', '')
+    if (path === 'sources') return Response.json([{ id: 'github', title: { zh: 'GitHub', en: 'GitHub' }, installed: true, enabled: true,
+      state: 'ready', health: [{ name: 'github', state: 'ready', detail: 'Next poll ≥ 60s', at }], checkedAt: at,
+      stats: { received: 0, filtered: 0, lastAt: '' }, filtered: [], dropped: [] }])
+    if (path === 'state') return Response.json({ masterId: 'master', settings: SettingsSchema.parse({}), revisions: { policy: 0, eval: 0,
+      executor: 0 }, sources: [], policy_version: 'v', health: {}, outgoing: [], load: { running: 0, queued: 0 },
+      setup: { machine: { stateDir: '/srv/state', worktreeRoot: '/srv/state/worktrees', blockedCommands: [], promptMaxChars: 100000,
+        admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 }, problem: null, feishuProblem: null, accounts: null } })
+    return Response.json({ problems: [], person: [], executor: { running: 0, queued: 0, maxWorkers: 3, idle: 0 }, flow: { triggers: 0,
+      filtered: 0, judged: 0, accepted: 0, evaluating: 0 }, policyVersion: 'v' })
+  }))
+  const { main } = fixture([])
+  const view = await render(main, { t })
+  const tab = [...view.container.querySelectorAll<HTMLElement>('button, [role="tab"]')].find(item => item.textContent === zh['tab.source'])!
+  await act(async () => { tab.click() })
+  for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(view.container.textContent).toContain(zh.sourceCheckedLabel)
+  view.dispose()
+})
+
 it('polls one request at a time, keeps the data while new dependencies load, and polls less while hidden', async () => {
   vi.useFakeTimers()
   const calls: { limit: number; done: (value: string[]) => void }[] = []

@@ -161,6 +161,7 @@ const TEXT = {
   sourceReceivedLabel: ['24 小时到达', 'Arrived in 24 h'],
   sourceFilteredLabel: ['被过滤', 'Filtered'],
   sourceLatestLabel: ['最近', 'Latest'],
+  sourceCheckedLabel: ['上次检查', 'Last checked'],
   advanced: ['高级', 'Advanced'],
   'sourceState.done': ['运行中', 'Running'],
   'sourceState.ongoing': ['启动中', 'Starting'],
