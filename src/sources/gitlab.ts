@@ -349,7 +349,10 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
     try {
       if (!config) ctx.report(SOURCE, health('paused', 'sourceOff'))
       else if (!usable(config)) ctx.report(SOURCE, health('paused', 'setupPending'))
-      else await pollRound(ctx)
+      else {
+        const interval = await pollRound(ctx)
+        ctx.report(SOURCE, { state: 'ready', detail: `Next poll ≥ ${interval}s` })
+      }
       failures = 0
     } catch (error) {
       failures += 1
