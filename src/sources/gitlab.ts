@@ -9,11 +9,12 @@ import { z } from 'zod'
 import { key, type Thread, type Trigger } from '../core/index.ts'
 import { CliError } from '../infra/commands.ts'
 import { gitlabProject } from '../deployment.ts'
+import { KV } from '../kv.ts'
 import { sameName } from '../infra/text.ts'
 import { health, sourceContext, type Health, type SourceContext } from './host.ts'
 import { gitlabChange, pollTicketMrs } from './gitlab-change.ts'
 import type { ChannelLink, ChannelLinks, ContextMessage, ContextPart, ContextPartName, Localized, SourceKind, ThreadContext } from './kind.ts'
-import { pause } from './poll.ts'
+import { cursorAt, pause, POLL_HORIZON_MS } from './poll.ts'
 
 export const SOURCE = 'gitlab'
 
@@ -30,6 +31,8 @@ export const GitlabConfigSchema = z.object({
   failuresBeforeError: z.number().int().min(1).max(20).default(3),
   observeTodos: z.boolean().default(true),
   observeNotes: z.boolean().default(true),
+  observeIssues: z.boolean().default(true),
+  observeMerges: z.boolean().default(false),
 }).strict()
 export type GitlabConfig = z.infer<typeof GitlabConfigSchema>
 /** True when the instance names an instance URL, project, account, and CLI; otherwise the Source stays paused. */
@@ -56,6 +59,13 @@ const TodoSchema = z.looseObject({
 const SubjectSchema = z.looseObject({
   iid: z.number(), title: z.string(), description: z.string().nullish(), web_url: z.string().nullish(), author: UserSchema,
 })
+/** A newly listed issue or merge request: the fields needed to build its Trigger without a second read. */
+const ObjectSchema = z.looseObject({
+  iid: z.number(), title: z.string(), description: z.string().nullish(), state: z.string().nullish(), web_url: z.string(),
+  author: UserSchema, assignees: z.array(UserSchema).nullish(), reviewers: z.array(UserSchema).nullish(),
+  created_at: z.string(), updated_at: z.string().nullish(),
+})
+export type GitlabObject = z.infer<typeof ObjectSchema>
 export type GitlabNote = z.infer<typeof NoteSchema>
 export type GitlabTodo = z.infer<typeof TodoSchema>
 
@@ -136,6 +146,33 @@ export function todoTrigger(todo: GitlabTodo, config: GitlabConfig, source = SOU
     meta: { kind, iid, project: config.project, todoId: todo.id, action: todo.action_name, author: todo.author.username,
       ...kind === 'mr' ? { isPr: true as const, number: iid } : {} } }
 }
+/** How far back the first sweep of a kind looks, so an Issue opened just before the Source started watching still starts a ticket. */
+const SWEEP_BACKFILL_MS = 24 * 3600_000
+/**
+ * Builds the Trigger for one issue or merge request listed by the sweep.
+ * GitLab sends no to-do when a person assigns the account itself and none at all for an Issue nobody is assigned to, so the
+ * sweep is how such an Issue reaches the Source. Assignment to the account (or review request) is a direct request; a mention
+ * in the title or description is a mention; anything else relies on the Policy's admission table.
+ * --- @ty.aicoding@ ---
+ */
+export function objectTrigger(object: GitlabObject, kind: Kind, config: GitlabConfig, source = SOURCE): Trigger {
+  const target = place(kind, object.iid, config, object.web_url, source)
+  const assigned = [...object.assignees ?? [], ...object.reviewers ?? []].some(user => sameName(user.username, config.account))
+  const text = [object.title, object.description ?? ''].filter(Boolean).join('\n\n')
+  // One GitLab account may also be the person's: an Issue in it is a person's even when the agent could have written it, while a
+  // merge request the account opened is the ticket's own change and stays machine-written.
+  const human = object.author.bot !== true && !(kind === 'mr' && sameName(object.author.username, config.account))
+  return { id: key('gitlab-object', config.project, kind, String(object.iid), assigned ? 'assigned' : 'open'), source,
+    threads: [{ source, id: threadId(kind, object.iid) }],
+    actor: { source, id: object.author.username },
+    human,
+    ...assigned ? { addressed: 'direct' as const } : mentioned(text, config.account) ? { addressed: 'mention' as const } : {},
+    at: at(object.created_at), text,
+    channel: { source, thread: threadId(kind, object.iid), address: addressOf(target) },
+    url: object.web_url,
+    meta: { kind, iid: object.iid, project: config.project, author: object.author.username,
+      ...kind === 'mr' ? { isPr: true as const, number: object.iid } : {} } }
+}
 /** The subject URL of the issue or merge request a thread belongs to. */
 function subjectPath(target: Place): string {
   return `projects/${encoded(target.project)}/${segment(target.kind)}/${target.iid}`
@@ -213,19 +250,54 @@ async function pollNotes(ctx: SourceContext, config: GitlabConfig, thread: Threa
   }
   if (latest !== cursor) ctx.threads.patch(thread.key, { gitlabNoteId: latest })
 }
-/** One polling round: pending to-dos, notes on every subscribed GitLab thread, then the merge requests of open tickets. */
+/**
+ * Sweeps newly opened issues and merge requests by `updated_after`, the only signal for an object GitLab generated no to-do
+ * for: an Issue the person assigned to the shared account itself, or one that is not assigned at all. Each kind keeps its own
+ * cursor so a stream of merge request updates cannot hide a later Issue, the first sweep of a kind looks back
+ * `SWEEP_BACKFILL_MS`, and objects a pending to-do already reported in this round are skipped so one request does not arrive
+ * twice. Repeated items are harmless because Trigger IDs are deterministic and Intake stores the first copy.
+ * --- @ty.aicoding@ ---
+ */
+async function pollObjects(ctx: SourceContext, config: GitlabConfig, noticed: ReadonlySet<string>): Promise<void> {
+  const kinds: Kind[] = [...config.observeIssues ? ['issue' as const] : [], ...config.observeMerges ? ['mr' as const] : []]
+  if (!kinds.length) return
+  const name = KV.gitlab.stream(ctx.instance)
+  const stored = ctx.state.get(name)
+  const started = { ...stored?.started }, since = { ...stored?.since }
+  const now = Date.now()
+  const horizon = Math.floor((now - POLL_HORIZON_MS) / 3_600_000) * 3_600_000
+  for (const kind of kinds) {
+    const first = started[kind] ?? new Date(now - SWEEP_BACKFILL_MS).toISOString()
+    started[kind] = first
+    const from = Math.max(Date.parse(since[kind] ?? first), horizon)
+    const listed = await api(ctx, config, `projects/${encoded(config.project)}/${segment(kind)}?state=opened&sort=asc`
+      + `&order_by=updated_at&per_page=100&updated_after=${encodeURIComponent(new Date(from).toISOString())}`, z.array(ObjectSchema))
+    for (const object of listed) {
+      // Objects updated long after they were opened come back through the cursor; only the ones this sweep window saw start are work.
+      if (noticed.has(threadId(kind, object.iid)) || Date.parse(object.created_at) < Date.parse(first)) continue
+      await ctx.receive(objectTrigger(object, kind, config, ctx.instance))
+    }
+    const newest = Math.max(...listed.map(object => Date.parse(object.updated_at ?? object.created_at)).filter(Number.isFinite))
+    // Advancing the cursor per kind keeps progress when the next kind fails and it is re-read on the next round.
+    if (Number.isFinite(newest)) since[kind] = new Date(Math.max(from, Date.parse(cursorAt(new Date(newest).toISOString())))).toISOString()
+    ctx.state.set(name, { since, started })
+  }
+}
+/** One polling round: pending to-dos, the opened-issue and merge-request sweep, notes on every subscribed thread, then the merge requests of open tickets. */
 export async function pollRound(ctx: SourceContext): Promise<number> {
   const config = ctx.config<GitlabConfig>(ctx.instance)
   if (!config) return 60
   if (!usable(config)) return 60
+  const noticed = new Set<string>()
   if (config.observeTodos) {
     const todos = await api(ctx, config, 'todos?state=pending&per_page=100', z.array(TodoSchema))
     for (const todo of todos) {
       if (sameName(todo.author.username, config.account)) continue
       const trigger = todoTrigger(todo, config, ctx.instance)
-      if (trigger) await ctx.receive(trigger)
+      if (trigger) { noticed.add(String(trigger.threads[0]?.id)); await ctx.receive(trigger) }
     }
   }
+  await pollObjects(ctx, config, noticed)
   if (config.observeNotes) {
     for (const thread of ctx.threads.subscribed(ctx.instance)) await pollNotes(ctx, config, thread)
   }
@@ -236,8 +308,8 @@ export async function pollRound(ctx: SourceContext): Promise<number> {
 export const gitlabKind: SourceKind<GitlabConfig> = {
   kind: SOURCE,
   title: { zh: 'GitLab', en: 'GitLab' },
-  description: { zh: '智能体的 GitLab 账号；接收发给它的待办和已订阅 Issue、MR 的讨论，通过 glab 回复。',
-    en: 'The agent\'s GitLab account; receives its to-dos and discussion on subscribed Issues and MRs, and replies through glab.' },
+  description: { zh: '智能体的 GitLab 账号；接收发给它的待办、项目里新开的 Issue 和已订阅 Issue、MR 的讨论，通过 glab 回复。',
+    en: 'The agent\'s GitLab account; receives its to-dos, new Issues in the project and discussion on subscribed Issues and MRs, and replies through glab.' },
   schema: GitlabConfigSchema,
   // One GitLab server can serve several projects; each stored instance names one.
   multi: true,
@@ -258,10 +330,14 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
       hint: { zh: '打开后，GitLab 发给智能体的待办会成为候选。', en: 'When on, to-dos GitLab assigns to the agent become candidates.' } },
     { key: 'observeNotes', type: 'switch', label: { zh: '接收已订阅讨论的新评论', en: 'Receive new comments on subscribed discussion' },
       hint: { zh: '只接收订阅发生之后的新评论，不读以前的。', en: 'Only comments after subscription are received; earlier ones are not read.' } },
+    { key: 'observeIssues', type: 'switch', label: { zh: '接收项目里的新 Issue', en: 'Receive new Issues in the project' },
+      hint: { zh: '打开后，项目里新开的 Issue 会成为候选；即使 GitLab 没给智能体发待办（比如创建人自己指派给自己）。', en: 'When on, Issues opened in the project become candidates even when GitLab sent the agent no to-do, such as an Issue its creator assigned to itself.' } },
+    { key: 'observeMerges', type: 'switch', advanced: true, label: { zh: '接收项目里的新 MR', en: 'Receive new merge requests in the project' },
+      hint: { zh: '默认关闭：指派给智能体的 MR 仍会通过待办到达。', en: 'Off by default: merge requests assigned to the agent still arrive through to-dos.' } },
   ],
   health: [SOURCE],
-  // Notes count as observed only while note polling is on; to-dos are always addressed to the agent.
-  scope: (_input, config) => ({ listened: true, observed: config.observeNotes }),
+  // Issue and note polling observe messages not addressed to the agent; to-dos are always addressed to it.
+  scope: (_input, config) => ({ listened: true, observed: config.observeNotes || config.observeIssues || config.observeMerges }),
   channel: { allowed: (address, config) => !!address.kind && !!address.iid && address.project?.toLowerCase() === config.project.toLowerCase(),
     send: sendGitlab, link: gitlabLink },
   threadContext: gitlabThreadContext,

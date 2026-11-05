@@ -49,6 +49,11 @@ export const KV = {
     branchCi: record<{ branch?: string; failures?: string[]; revision: number }>('github-branch-ci'),
     ci: family<{ fingerprint: string; revision: number }, [number: number]>('github-ci:') },
   /**
+   * GitLab Source: per-instance sweep cursors by kind (the newest `updated_at` already listed) and the time each kind's sweep
+   * started, which bounds how far the first observation looks back.
+   */
+  gitlab: { stream: family<{ since: Record<string, string>; started: Record<string, string> }, [instance: string]>('gitlab-stream:') },
+  /**
    * Feishu Source: known chats (`true` for direct messages); per-chat history cursor and active topics mapped from topic ID
    * to last-seen timestamp; and per-polled-thread seen message IDs and initialization flag.
    */
