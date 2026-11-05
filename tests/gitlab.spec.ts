@@ -4,8 +4,9 @@ import type { Thread } from '../src/core/index.ts'
 import { key } from '../src/core/index.ts'
 import { CliError } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
-import { GitlabConfigSchema, gitlabKind, gitlabLink, gitlabThreadContext, noteTrigger, pollRound, sendGitlab, todoTrigger,
+import { GitlabConfigSchema, gitlabKind, gitlabLink, gitlabThreadContext, noteTrigger, objectTrigger, pollRound, sendGitlab, todoTrigger,
   type GitlabConfig } from '../src/sources/gitlab.ts'
+import { KV } from '../src/kv.ts'
 import type { SourceContext } from '../src/sources/host.ts'
 
 const config = (overrides: Partial<GitlabConfig> = {}): GitlabConfig => GitlabConfigSchema.parse({ url: 'https://gitlab.example.com',
@@ -14,8 +15,18 @@ const thread = (id: string, meta: Record<string, unknown> = {}): Thread => ({ ke
   createdAt: '2026-01-01T00:00:00.000Z', subscriptions: ['ticket'], correlated: [], pending: [], meta })
 const note = (id: number, body: string, created_at = '2026-01-02T00:00:00.000Z', author: { username: string; bot?: boolean } = { username: 'alice' }) =>
   ({ id, body, author, created_at, updated_at: created_at })
+const object = (iid: number, overrides: Record<string, unknown> = {}) => ({ iid, title: `Issue ${iid}`,
+  description: 'please look', state: 'opened', web_url: `https://gitlab.example.com/group/sub/project/-/issues/${iid}`,
+  author: { username: 'alice' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...overrides })
+/** The list endpoint of the opened-object sweep; mocks that answer polls return an empty page for it unless a test says otherwise. */
+const isSweep = (path: string): boolean => /\/issues\?|\/merge_requests\?/.test(path)
+const store = () => {
+  const data = new Map<string, unknown>()
+  return { get: (name: string) => data.get(name), set: (name: string, value: unknown) => { if (value === undefined) data.delete(name); else data.set(name, value) },
+    keys: () => [...data.keys()] }
+}
 const context = (value: GitlabConfig, overrides: Partial<SourceContext> = {}): SourceContext => ({
-  commands: { run: vi.fn() }, configured: () => true, config: () => value, receive: vi.fn(),
+  instance: 'gitlab', commands: { run: vi.fn() }, configured: () => true, config: () => value, receive: vi.fn(), state: store(),
   threads: { subscribed: () => [], patch: vi.fn(), describe: vi.fn(), get: vi.fn() },
   ...overrides,
 } as unknown as SourceContext)
@@ -23,7 +34,8 @@ const context = (value: GitlabConfig, overrides: Partial<SourceContext> = {}): S
 describe('GitLab configuration', () => {
   it('fills defaults and treats an unconfigured instance as unusable', async () => {
     const empty = GitlabConfigSchema.parse({})
-    expect(empty).toMatchObject({ url: '', project: '', cli: 'glab', account: '', pollSeconds: 60, failuresBeforeError: 3, observeTodos: true, observeNotes: true })
+    expect(empty).toMatchObject({ url: '', project: '', cli: 'glab', account: '', pollSeconds: 60, failuresBeforeError: 3, observeTodos: true,
+      observeNotes: true, observeIssues: true, observeMerges: false })
     const ctx = context(empty)
     expect(await pollRound(ctx)).toBe(60)
     expect(ctx.commands.run).not.toHaveBeenCalled()
@@ -50,7 +62,8 @@ describe('GitLab configuration', () => {
     expect(gitlabKind.schema.parse({ url: 'https://gitlab.example.com', project: 'group/project', account: 'agent' }))
       .toMatchObject({ project: 'group/project', account: 'agent' })
     expect(gitlabKind.scope?.({ meta: {} }, config())).toEqual({ listened: true, observed: true })
-    expect(gitlabKind.scope?.({ meta: {} }, config({ observeNotes: false }))).toEqual({ listened: true, observed: false })
+    expect(gitlabKind.scope?.({ meta: {} }, config({ observeNotes: false }))).toEqual({ listened: true, observed: true })
+    expect(gitlabKind.scope?.({ meta: {} }, config({ observeNotes: false, observeIssues: false }))).toEqual({ listened: true, observed: false })
   })
 })
 
@@ -88,13 +101,24 @@ describe('GitLab triggers', () => {
     expect(todoTrigger({ ...todo, target_url: 'https://gitlab.example.com/other/project/-/issues/1',
       target: { iid: 9, web_url: 'https://gitlab.example.com/other/project/-/issues/1' } }, config())).toBeUndefined()
   })
+  it('builds an object trigger for a swept Issue with its assignment and authorship', () => {
+    const issue = object(3, { author: { username: 'agent' }, assignees: [{ username: 'agent' }] })
+    expect(objectTrigger(issue, 'issue', config())).toMatchObject({ human: true, addressed: 'direct',
+      id: key('gitlab-object', 'group/sub/project', 'issue', '3', 'assigned'),
+      threads: [{ source: 'gitlab', id: 'issue:3' }], channel: { address: { kind: 'issue', iid: '3', project: 'group/sub/project' } } })
+    expect(objectTrigger(object(3, { description: 'hi @agent please' }), 'issue', config()))
+      .toMatchObject({ human: true, addressed: 'mention', id: key('gitlab-object', 'group/sub/project', 'issue', '3', 'open') })
+    expect(objectTrigger(object(3, { description: 'no request here' }), 'issue', config()).addressed).toBeUndefined()
+    expect(objectTrigger(object(3, { author: { username: 'ci', bot: true } }), 'issue', config()).human).toBe(false)
+    expect(objectTrigger(object(3, { author: { username: 'agent' } }), 'mr', config()).human).toBe(false)
+  })
 })
 
 describe('GitLab polling', () => {
   const notes = [note(1, 'old', '2026-01-01T00:00:00.000Z'), note(2, 'new', '2026-01-03T00:00:00.000Z')]
   const run = vi.fn(async (_program: string, args: string[]) => {
     const path = args[3] ?? ''
-    if (path.startsWith('todos')) return JSON.stringify([])
+    if (path.startsWith('todos') || isSweep(path)) return JSON.stringify([])
     return JSON.stringify(notes)
   })
   it('seeds the note cursor on the first read without receiving history', async () => {
@@ -107,14 +131,14 @@ describe('GitLab polling', () => {
     expect(patch).toHaveBeenCalledWith('gitlab:issue:12', { gitlabNoteId: 2 })
   })
   it('starts an empty thread at zero so its first note is received', async () => {
-    const empty = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : '[]')
+    const empty = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') || isSweep(args[3] ?? '') ? '[]' : '[]')
     const receive = vi.fn(), patch = vi.fn()
     const ctx = context(config(), { commands: { run: empty } as unknown as SourceContext['commands'],
       receive: receive as unknown as SourceContext['receive'],
       threads: { subscribed: () => [thread('issue:12')], patch, describe: vi.fn(), get: vi.fn() } })
     await pollRound(ctx)
     expect(patch).toHaveBeenCalledWith('gitlab:issue:12', { gitlabNoteId: 0 })
-    const first = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify([note(9, 'first')]))
+    const first = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') || isSweep(args[3] ?? '') ? '[]' : JSON.stringify([note(9, 'first')]))
     await pollRound(context(config(), { commands: { run: first } as unknown as SourceContext['commands'],
       receive: receive as unknown as SourceContext['receive'],
       threads: { subscribed: () => [thread('issue:12', { gitlabNoteId: 0 })], patch, describe: vi.fn(), get: vi.fn() } }))
@@ -123,7 +147,7 @@ describe('GitLab polling', () => {
   it('receives only notes newer than the cursor, skipping the agent and system notes', async () => {
     const latest = [note(2, 'old', '2026-01-03T00:00:00.000Z'), note(3, 'mine', '2026-01-04T00:00:00.000Z', { username: 'agent' }),
       { ...note(4, 'system', '2026-01-04T00:00:00.000Z'), system: true }, note(5, 'new', '2026-01-05T00:00:00.000Z')]
-    const run2 = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify(latest))
+    const run2 = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') || isSweep(args[3] ?? '') ? '[]' : JSON.stringify(latest))
     const receive = vi.fn()
     const ctx = context(config(), { commands: { run: run2 } as unknown as SourceContext['commands'],
       receive: receive as unknown as SourceContext['receive'],
@@ -136,7 +160,7 @@ describe('GitLab polling', () => {
   it('processes a newest-first page in chronological order', async () => {
     const page = [note(5, 'newest', '2026-01-05T00:00:00.000Z'), note(4, 'older', '2026-01-04T00:00:00.000Z'),
       note(3, 'old', '2026-01-03T00:00:00.000Z')]
-    const run = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify(page))
+    const run = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') || isSweep(args[3] ?? '') ? '[]' : JSON.stringify(page))
     const receive = vi.fn()
     await pollRound(context(config(), { commands: { run } as unknown as SourceContext['commands'],
       receive: receive as unknown as SourceContext['receive'],
@@ -160,8 +184,63 @@ describe('GitLab polling', () => {
     expect(receive).toHaveBeenCalledTimes(1)
     expect(receive.mock.calls[0]![0]).toMatchObject({ text: 'Do it', meta: { kind: 'issue', iid: 4 } })
   })
+  it('receives an Issue its creator assigned to the shared account itself, which sends no to-do', async () => {
+    const issue = object(1, { title: '接口增加 industry字段', author: { username: 'agent' }, assignees: [{ username: 'agent' }] })
+    const sweep = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify([issue]))
+    const receive = vi.fn()
+    await pollRound(context(config({ observeNotes: false }), { commands: { run: sweep } as unknown as SourceContext['commands'],
+      receive: receive as unknown as SourceContext['receive'] }))
+    expect(receive).toHaveBeenCalledTimes(1)
+    expect(receive.mock.calls[0]![0]).toMatchObject({ human: true, addressed: 'direct', threads: [{ source: 'gitlab', id: 'issue:1' }],
+      meta: { kind: 'issue', iid: 1 }, url: issue.web_url })
+    const path = sweep.mock.calls.map(call => call[1][3] ?? '').find(isSweep)!
+    expect(path).toContain('projects/group%2Fsub%2Fproject/issues?state=opened')
+    expect(path).toMatch(/updated_after=\d{4}-\d{2}-\d{2}T/)
+  })
+  it('does not report again an Issue a pending to-do already delivered in the same round', async () => {
+    const issue = object(4, { assignees: [{ username: 'agent' }] })
+    const todos = [{ id: 1, author: { username: 'alice' }, action_name: 'assigned', target_type: 'Issue',
+      target: { iid: 4, title: 'Issue 4', web_url: issue.web_url }, created_at: '2026-01-02T00:00:00.000Z' }]
+    const run = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? JSON.stringify(todos) : JSON.stringify([issue]))
+    const receive = vi.fn()
+    await pollRound(context(config({ observeNotes: false }), { commands: { run } as unknown as SourceContext['commands'],
+      receive: receive as unknown as SourceContext['receive'] }))
+    expect(receive).toHaveBeenCalledTimes(1)
+    expect(receive.mock.calls[0]![0]).toMatchObject({ meta: { todoId: 1, iid: 4 } })
+  })
+  it('looks back one day on the first sighting and keeps a cursor per kind', async () => {
+    const stale = object(1, { created_at: new Date(Date.now() - 3 * 24 * 3600_000).toISOString() })
+    const fresh = object(2)
+    const sweep = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify([stale, fresh]))
+    const receive = vi.fn()
+    const ctx = context(config({ observeNotes: false }), { commands: { run: sweep } as unknown as SourceContext['commands'],
+      receive: receive as unknown as SourceContext['receive'] })
+    await pollRound(ctx)
+    expect(receive.mock.calls.map(call => call[0].meta.iid)).toEqual([2])
+    const stored = ctx.state.get(KV.gitlab.stream('gitlab'))!
+    expect(stored.started.issue).toBeDefined()
+    expect(Date.parse(stored.since.issue!)).toBeGreaterThan(Date.now() - 60_000)
+  })
+  it('sweeps merge requests only when that switch is on', async () => {
+    const mr = object(7, { web_url: 'https://gitlab.example.com/group/sub/project/-/merge_requests/7', assignees: [{ username: 'agent' }] })
+    const byKind = (kind: string, items: unknown[]) => vi.fn(async (_program: string, args: string[]) => {
+      const path = args[3] ?? ''
+      if (path.startsWith('todos')) return '[]'
+      return path.startsWith(`projects/group%2Fsub%2Fproject/${kind}?`) ? JSON.stringify(items) : '[]'
+    })
+    const receive = vi.fn()
+    const off = byKind('issues', [])
+    await pollRound(context(config({ observeNotes: false }), { commands: { run: off } as unknown as SourceContext['commands'],
+      receive: receive as unknown as SourceContext['receive'] }))
+    expect(off.mock.calls.some(call => (call[1][3] ?? '').includes('merge_requests?'))).toBe(false)
+    expect(receive).not.toHaveBeenCalled()
+    await pollRound(context(config({ observeNotes: false, observeMerges: true }), { commands: { run: byKind('merge_requests', [mr]) } as unknown as SourceContext['commands'],
+      receive: receive as unknown as SourceContext['receive'] }))
+    expect(receive).toHaveBeenCalledTimes(1)
+    expect(receive.mock.calls[0]![0]).toMatchObject({ addressed: 'direct', meta: { isPr: true, number: 7 }, threads: [{ id: 'mr:7' }] })
+  })
   it('polls over its own project instance\'s configuration and subscriptions', async () => {
-    const run = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') ? '[]' : JSON.stringify([note(9, 'first')]))
+    const run = vi.fn(async (_program: string, args: string[]) => args[3]?.startsWith('todos') || isSweep(args[3] ?? '') ? '[]' : JSON.stringify([note(9, 'first')]))
     const receive = vi.fn()
     const configOf = vi.fn(() => config())
     const subscribed = vi.fn(() => [thread('issue:12', { gitlabNoteId: 0 })])

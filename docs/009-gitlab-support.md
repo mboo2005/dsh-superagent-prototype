@@ -86,6 +86,17 @@ The Source files mirror the GitHub ones: `gitlab-trigger.ts`, `gitlab-poll.ts`, 
 
 Polling is the part that needs a decision. The GitHub Source relies on the notifications API filtered to the repository. GitLab's to-do API covers mentions and review requests but not everything the notifications API does, and project events have their own retention and latency. The alternatives are webhooks (the panel's HTTP server already exists, but it is not a public endpoint in the documented deployment) or `updated_after` sweeps over issues and merge requests plus their notes. The first implementation should pick one and state its coverage honestly; the to-do API plus `updated_after` sweeps is the least new infrastructure.
 
+That choice is now implemented (`src/sources/gitlab.ts`, `KV.gitlab.stream`). A poll round reads pending to-dos, sweeps the project's opened issues (on by default, `observeIssues`) and merge requests (off by default, `observeMerges`) with `state=opened&sort=asc&order_by=updated_at&updated_after=…&per_page=100`, then reads the notes of subscribed threads. The sweep is what carries an Issue GitLab sends no to-do for: a person assigning the shared account itself, or an Issue nobody is assigned to. An assignment or review request to the account becomes a direct trigger, a mention of it becomes a mention, and anything else is an unaddressed candidate that the Policy's admission table decides — the same shape as GitHub's observed issues.
+
+Coverage and limits worth knowing:
+
+- Each kind keeps its own cursor, and the cursor advances per kind after a successful page, so a busy merge request stream cannot push the Issue cursor past new work.
+- The first sweep of a kind looks back 24 hours (`SWEEP_BACKFILL_MS`), which catches an Issue opened just before a deployment upgrade; older work is not replayed.
+- Trigger IDs are deterministic (`gitlab-object:<project>:<kind>:<iid>:<open|assigned>`) and Intake stores the first copy, so re-reading with the 5-second lookback is harmless. An Issue first seen before it was assigned produces one candidate when it is opened and another when the account is later assigned to it.
+- Objects already delivered as a to-do in the same round are skipped, so one request does not queue twice.
+- The sweep sees created/updated/pinned records, not comments: discussion still arrives through to-dos and subscribed-thread note polling. An edit of an Issue's description after its first delivery does not re-trigger it; a person who needs the agent again comments or mentions it.
+- GitLab suppresses the to-do a person would otherwise create by assigning an account to itself, so an Issue created by the agent's own account counts as a person's (a merge request it opened stays machine-written, as on GitHub).
+
 Reply and channel work is straightforward: notes on issues and merge requests, `glab mr note`/`glab issue note` or REST `POST .../notes`.
 
 ### 3. The change lifecycle
