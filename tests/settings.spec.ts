@@ -121,3 +121,15 @@ it('accepts one more project instance of a kind that supports several, and refus
     .rejects.toThrow(new UserError('sourceNotInstalled', { source: 'missing' }))
   expect(store.settings().sources['single-two']).toBeUndefined()
 })
+
+it('saves an existing project instance from the panel block, whose value does not name its kind', async () => {
+  h = await startRuntime()
+  const { settings, store, sources } = h.runtime
+  sources.register(probeKind)
+  await settings.save('source:probe-two', { enabled: true, kind: 'probe', config: { project: 'web' } }, 0, 'panel')
+  const block = settings.block('source:probe-two')
+  expect(block.value).toEqual({ enabled: true, config: { project: 'web' } })
+  await expect(settings.save('source:probe-two', block.value, block.revision, 'panel')).resolves.toMatchObject({ saved: true })
+  await settings.save('source:probe-two', { enabled: false, config: { project: 'api' } }, block.revision, 'panel')
+  expect(store.settings().sources['probe-two']).toEqual({ enabled: false, kind: 'probe', config: { project: 'api' } })
+})
