@@ -427,7 +427,8 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       else if (!usable(config)) ctx.report(SOURCE, health('paused', 'setupPending'))
       else {
         const interval = await pollRound(ctx)
-        ctx.report(SOURCE, { state: 'ready', detail: `Next poll ≥ ${interval}s` })
+        // Stamp every successful round so the panel can show that an idle Source is still polling.
+        ctx.report(SOURCE, { state: 'ready', detail: `Next poll ≥ ${interval}s`, at: new Date().toISOString() })
       }
       failures = 0
     } catch (error) {

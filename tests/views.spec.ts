@@ -123,6 +123,26 @@ it('reads the health of a project instance from its own entry, not its kind\'s',
   expect(sourceHealth(sources, { ...instance, id: 'github' }, { github: { state: 'ready', detail: 'kind' } }).health)
     .toEqual([{ name: 'github', state: 'ready', detail: 'kind' }])
 })
+it('reports when each Source last checked, so an idle Source still looks alive', () => {
+  const host = views()
+  const checked = (health: Parameters<typeof sourcesStatus>[1]) => Object.fromEntries(sourcesStatus(host, health, {})
+    .map(row => [row.id, row.checkedAt]))
+  // A Source that never reported has no check time, and neither has one whose parts carry none.
+  expect(checked({})).toEqual({ feishu: undefined, github: undefined })
+  expect(checked({ feishu: { state: 'ready', detail: '', at: '2026-11-05T09:00:00.000Z' }, github: { state: 'ready', detail: '' } }))
+    .toEqual({ feishu: '2026-11-05T09:00:00.000Z', github: undefined })
+  // The newest report of a Source's parts wins.
+  expect(checked({ feishu: { state: 'ready', detail: '', at: '2026-11-05T09:00:00.000Z' },
+    history: { state: 'ready', detail: '', at: '2026-11-05T09:30:00.000Z' }, github: { state: 'ready', detail: '' } }).feishu)
+    .toBe('2026-11-05T09:30:00.000Z')
+  // A project instance keeps its own entry's check time.
+  const projects = new SourceRegistry(() => SettingsSchema.parse({ sources: { 'github-two': { enabled: true, kind: 'github', config: {} } } }))
+  projects.register(githubKind)
+  expect(Object.fromEntries(sourcesStatus({ ...host, sources: projects }, { github: { state: 'ready', detail: '',
+    at: '2026-11-05T09:00:00.000Z' }, 'github:github-two': { state: 'ready', detail: '', at: '2026-11-05T09:40:00.000Z' } }, {})
+    .map(row => [row.id, row.checkedAt])))
+    .toEqual({ github: '2026-11-05T09:00:00.000Z', 'github-two': '2026-11-05T09:40:00.000Z' })
+})
 it('follows the Ticket\'s stage: a blocked Ticket a person answered since is working, with no retry, note or turn end', () => {
   const host = views()
   const blocked = { state: 'blocked' as const, summary: 'Needs the design file', at: '2026-09-22T00:01:00Z' }

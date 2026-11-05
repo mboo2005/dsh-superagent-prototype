@@ -108,6 +108,7 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
       <div className="dt-row-title"><span className="dt-row-name">{localized(t, source.title)}</span><span className="dt-status-text"
         data-state={dot}>{state}</span></div>
       <div className="dt-row-meta">
+        {source.checkedAt && <LabelValue label={t('sourceCheckedLabel')} value={when(source.checkedAt, t('lang'))} />}
         {received > 0 && <LabelValue label={t('sourceReceivedLabel')}
           value={received} />}{filtered > 0 && <LabelValue label={t('sourceFilteredLabel')} value={filtered} />}
         {lastAt && <LabelValue label={t('sourceLatestLabel')} value={when(lastAt, t('lang'))} />}
