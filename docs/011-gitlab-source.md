@@ -12,7 +12,9 @@ The sweep is on for Issues (`observeIssues`) and off for Merge Requests (`observ
 
 A thread key is `gitlab:issue:<iid>` or `gitlab:mr:<iid>`. Issues and Merge Requests have separate IID sequences, so the kind is part of the key. `find` accepts `12`, `#12`, `!12`, and an Issue or Merge Request URL from any project.
 
-The first poll of a subscribed thread records its newest note id and receives no history. Later polls receive only notes with a newer id. Replies go to the same Issue or Merge Request through the Source Channel, which embeds `<!-- dsh-superagent:<message id> -->` so a repeated delivery is not posted twice.
+The first poll of a subscribed thread records its newest note id and receives no history. Later polls receive only notes with a newer id. Replies go to the same Issue or Merge Request through the Source Channel, which prefixes them with `[aibot]`, the same fixed prefix the GitHub Source posts, and embeds `<!-- dsh-superagent:<message id> -->` so a repeated delivery is not posted twice.
+
+The prefix is what separates the agent's writing from a person's when both use one account, which is the usual GitLab setup: `account` names the operator's own user, and the agent signs in with it. A note from that account is the agent's only when it opens with `[aibot]` or carries the hidden marker; every other note from it is the person's and is received like any other. Without the prefix, the Source could not tell a person's comment from its own reply, and skipping the account would drop every follow-up a person writes.
 
 ## Configuration
 
@@ -23,7 +25,7 @@ Add a **GitLab** Source in the panel, or insert a settings block with kind `gitl
 | `url` | The instance URL, such as `https://gitlab.example.com`. Its host also selects the GitLab CLI hostname. |
 | `project` | The project to watch, as `group/project`; nested groups are allowed. |
 | `cli` | Command or absolute path of the agent's GitLab CLI, by default `glab`. |
-| `account` | The agent's GitLab username, used to recognize its own notes and mentions. |
+| `account` | The GitLab username the agent writes as, used to recognize its own notes, its mentions and its assigned to-dos. It may be the operator's own user, since the `[aibot]` prefix separates the two. |
 | `email` | Commit email for the agent, shown to Executors as `DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL`; empty uses `account@users.noreply.<host>`. |
 | `pollSeconds` | Polling interval, 60 to 3600 seconds; default 60. |
 | `failuresBeforeError` | Consecutive failed polls before reporting an error; default 3. |
@@ -32,7 +34,7 @@ Add a **GitLab** Source in the panel, or insert a settings block with kind `gitl
 
 Every field has a default because a disabled Source is still resolved from its stored settings. A Source with no URL, project, account or CLI stays paused and reports `setupPending`; it does not fail startup.
 
-The CLI must be signed in only as the agent account. Keep its credentials out of the settings, as with `gh`:
+The CLI must be signed in as the account `account` names. That may be the operator's own user: the `[aibot]` prefix keeps its replies apart from the person's notes. A dedicated agent account still works and keeps the agent's authorship visible in the GitLab UI. Keep its credentials out of the settings, as with `gh`:
 
 ```sh
 GLAB_CONFIG_DIR=/home/me/.config/glab-agent glab auth login --hostname gitlab.example.com

@@ -5,6 +5,8 @@ description: Read GitLab issues, merge requests and discussion with the GitLab S
 
 The GitLab Source watches one self-hosted project's issues and merge requests. Its to-dos assigned to the agent, and every note on a subscribed issue or merge request, arrive as triggers with their discussion; the assessment reads that context through the Source, so no direct `glab` call is needed to start. A note counts as addressed only when it mentions the agent's GitLab username; a to-do is addressed to the agent directly. Other activity stays context and creates no ticket. Reply in the thread with `orchestrator_reply` or the usual report path, not by calling `glab` yourself.
 
+The Source signs in as its configured account, which is often the operator's own GitLab user, so every note it posts carries `[aibot]` at the start and a hidden `<!-- dsh-superagent:… -->` marker; either one marks a note as the agent's own, and a note from that account with neither is the person's and arrives as a new request. When you post a note directly with `glab` on a watched thread, begin it with `[aibot] ` yourself, or the next poll reads it back as a person asking for work.
+
 A thread key reads `gitlab:issue:<iid>` or `gitlab:mr:<iid>`; an issue and a merge request may share an IID, so name the kind. The source configuration carries the instance URL, the project as `group/project`, the agent's username and its CLI; the execution environment names the instance, project, account and, for a GitLab Ticket, its kind and IID.
 
 ## Worker delivery
