@@ -24,6 +24,19 @@ export interface Change {
   autoMerge?: boolean | undefined
   /** When the host reported the merge or closure, if it did. */
   endedAt?: string | undefined
+  /** The review verdict the host reports without a note, so an approval alone still reaches the ticket; absent when none. */
+  review?: Review | undefined
+}
+
+/**
+ * A review verdict on a change and who gave it. `approved` means every required approval is in, the only verdict GitLab
+ * reports without a note; a request for changes reaches the ticket as the reviewer's comment instead.
+ * --- @ty.aicoding@1793952284274 ---
+ */
+export interface Review {
+  verdict: 'approved' | 'changes'
+  /** Usernames of the reviewers whose verdict this is, never the agent's own account. */
+  by: string[]
 }
 
 /**
@@ -118,12 +131,22 @@ export async function observeChange(ctx: SourceContext, host: ChangeHost, change
   return ended
 }
 /**
+ * The ThreadRef of a change, read back from the key the host names it by, so a bound Thread and `host.id` agree. A GitLab
+ * change's id is `mr:<iid>`, not the bare number, and binding the bare number would leave `changesOf` unable to find the
+ * follow again: the ticket would never observe its change close, and a merge would never end it.
+ * --- @ty.aicoding@1793938961579 ---
+ */
+const changeRef = (host: ChangeHost, id: number): { source: string; id: string } => {
+  const thread = host.thread(id)
+  return { source: host.source, id: thread.startsWith(`${host.source}:`) ? thread.slice(host.source.length + 1) : String(id) }
+}
+/**
  * Binds the change's Thread to the ticket and records the change on it.
- * --- @ty.aicoding@ ---
+ * --- @ty.aicoding@1793938961579 ---
  */
 function bind(ctx: SourceContext, host: ChangeHost, ticketId: string, change: Change, own: boolean): void {
   ctx.atomic(() => {
-    ctx.tickets.bindThread(ticketId, { source: host.source, id: String(change.id) }, own)
+    ctx.tickets.bindThread(ticketId, changeRef(host, change.id), own)
     ctx.threads.patch(changeThread(host, change.id), { number: change.id, isPr: true, url: change.url, prAuthor: change.author })
   })
 }
