@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Ticket } from '../src/core/index.ts'
 import type { Deployment } from '../src/deployment.ts'
+import { CliError } from '../src/infra/commands.ts'
 import type { SourceContext } from '../src/sources/host.ts'
 import { claimChange } from '../src/sources/change.ts'
-import { asChange, claimMr, gitlabChange, mrOf, mrsOf, pollTicketMrs, readMr, type GitlabMr } from '../src/sources/gitlab-change.ts'
+import { asChange, approvalReview, claimMr, gitlabChange, mrOf, mrsOf, pollTicketMrs, readApprovals, readMr, type GitlabMr }
+  from '../src/sources/gitlab-change.ts'
 
 const project: NonNullable<Deployment['gitlab']> = { url: 'https://gitlab.example.com', host: 'gitlab.example.com',
   project: 'group/project', cli: 'glab-agent', account: 'agent', email: 'agent@example.com' }
@@ -11,22 +13,29 @@ const mr = (over: Partial<GitlabMr> = {}): GitlabMr => ({
   iid: 5, title: 'Fix the widget', web_url: 'https://gitlab.example.com/group/project/-/merge_requests/5', state: 'opened',
   author: { username: 'agent' }, source_branch: 'agent/ticket', source_project_id: 1, target_project_id: 1, ...over,
 })
-const context = (options: { mr?: GitlabMr; fail?: Error; tickets?: Ticket[]; deployment?: Deployment['gitlab'] } = {}) => {
-  const run = vi.fn(async () => {
+/**
+ * A Source context whose one command answers both reads the change lifecycle makes: the merge request, and its approvals.
+ * --- @ty.aicoding@1793953170445 ---
+ */
+const context = (options: { mr?: GitlabMr; approvals?: unknown; fail?: Error; tickets?: Ticket[]; deployment?: Deployment['gitlab'] } = {}) => {
+  // One mock answers both reads the change lifecycle makes: the merge request itself, and its approvals.
+  const run = vi.fn(async (_program: string, args: string[]) => {
     if (options.fail) throw options.fail
-    return JSON.stringify(options.mr ?? mr())
+    const path = args[3] ?? ''
+    return JSON.stringify(path.endsWith('/approvals') ? options.approvals ?? {} : options.mr ?? mr())
   })
-  const patch = vi.fn(), describe = vi.fn(), threadClosed = vi.fn(), bindThread = vi.fn()
+  const patch = vi.fn(), describe = vi.fn(), threadClosed = vi.fn(), bindThread = vi.fn(), receive = vi.fn()
   const ctx = {
     deployment: { gitlab: options.deployment ?? project },
     commands: { run, withSignal: vi.fn(() => ({ run })) },
     config: () => ({}),
     tickets: { open: () => options.tickets ?? [], get: vi.fn(), threadClosed, bindThread },
-    threads: { patch, describe },
+    threads: { patch, describe, get: vi.fn() },
     atomic: (action: () => void) => action(),
     triggers: { get: () => undefined },
+    receive,
   } as unknown as SourceContext
-  return { ctx, run, patch, describe, threadClosed, bindThread }
+  return { ctx, run, patch, describe, threadClosed, bindThread, receive }
 }
 const followed = (thread: string, closed = false): Ticket => ({ follows: [{ thread, closed }] } as unknown as Ticket)
 
@@ -108,5 +117,34 @@ describe('GitLab merge requests as changes', () => {
     await pollTicketMrs(ctx)
     expect(run).not.toHaveBeenCalled()
     expect(patch).not.toHaveBeenCalled()
+  })
+  /**
+   * A reviewer who only approves writes no note, so the approval itself must reach the ticket: it is read with the merge
+   * request, stated once on its Thread, and received as a message there.
+   * --- @ty.aicoding@1793953033352 ---
+   */
+  it('reads an approval given without a note and states it once on the merge request\'s thread', async () => {
+    const approvals = { approved: true, approved_by: [{ username: 'alice' }, { username: 'agent' }] }
+    const { ctx, patch, receive } = context({ approvals, tickets: [followed('gitlab:mr:5')] })
+    ;(ctx.threads as unknown as { get: () => { meta: Record<string, unknown> } }).get = () => ({ meta: {} })
+    await pollTicketMrs(ctx)
+    expect(patch).toHaveBeenCalledWith('gitlab:mr:5', { review: 'approved' })
+    expect(receive).toHaveBeenCalledTimes(1)
+    expect(receive.mock.calls[0]![0]).toMatchObject({ human: true, threads: [{ source: 'gitlab', id: 'mr:5' }], meta: { number: 5, kind: 'review' } })
+    expect(receive.mock.calls[0]![0].text).toContain('alice approved MR #5')
+    expect(receive.mock.calls[0]![0].text).not.toContain('agent')
+  })
+  it('states an approval once and ignores the agent\'s own', async () => {
+    const stated = context({ approvals: { approved: true, approved_by: [{ username: 'alice' }] }, tickets: [followed('gitlab:mr:5')] })
+    ;(stated.ctx.threads as unknown as { get: () => { meta: Record<string, unknown> } }).get = () => ({ meta: { review: 'approved' } })
+    await pollTicketMrs(stated.ctx)
+    expect(stated.receive).not.toHaveBeenCalled()
+    expect(approvalReview({ approved: true, approved_by: [{ username: 'agent' }] }, 'agent')).toBeUndefined()
+    expect(approvalReview({ approved: true, approved_by: [{ username: 'bob' }, { username: 'bob' }] }, 'agent')).toEqual({ verdict: 'approved', by: ['bob'] })
+  })
+  it('reports no approval when the instance does not serve the approvals endpoint', async () => {
+    const run = vi.fn(async () => { throw new CliError('glab: HTTP 404', 404) })
+    const ctx = { commands: { run, withSignal: vi.fn(() => ({ run })) } } as unknown as SourceContext
+    await expect(readApprovals(ctx, project, 5)).resolves.toEqual({})
   })
 })

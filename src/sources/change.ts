@@ -24,6 +24,19 @@ export interface Change {
   autoMerge?: boolean | undefined
   /** When the host reported the merge or closure, if it did. */
   endedAt?: string | undefined
+  /** The review verdict the host reports without a note, so an approval alone still reaches the ticket; absent when none. */
+  review?: Review | undefined
+}
+
+/**
+ * A review verdict on a change and who gave it. `approved` means every required approval is in, the only verdict GitLab
+ * reports without a note; a request for changes reaches the ticket as the reviewer's comment instead.
+ * --- @ty.aicoding@1793952284274 ---
+ */
+export interface Review {
+  verdict: 'approved' | 'changes'
+  /** Usernames of the reviewers whose verdict this is, never the agent's own account. */
+  by: string[]
 }
 
 /**
