@@ -77,7 +77,7 @@ Several specs fail on structure, not on assertions. Read these before a refactor
 
 - `tests/class-docs.spec.ts` — every `class` in `src` must have a `/** … */` block immediately before it.
 - `tests/docs.spec.ts` — `docs/007-architecture.md` must list **every** file in `src/` in its Modules table and **every** `tests/*.spec.ts(x)` in its Tests table; numbered docs may link only to lower-numbered ones; all local links must resolve.
-- `tests/model-surface.spec.ts` — character budget for the assembled prompt + tool schemas per role (`orchestrator: 59_600`, `worker: 40_500`), plus banned words/phrases and legacy terminology in model-facing text.
+- `tests/model-surface.spec.ts` — character budget for the assembled prompt + tool schemas per role (`orchestrator: 63_000`, `worker: 43_600`), plus banned words/phrases and legacy terminology in model-facing text.
 - `tests/cards.spec.ts` — required and forbidden exact phrases per prompt/skill section; changing built-in wording usually means changing this table too.
 - `tests/bundle-patch.spec.ts` — `cordis.patch.yml` as DSH loads it, including the `dsh-superagent-worker` / `dsh-superagent-router` presets.
 
@@ -87,3 +87,4 @@ Source files also carry `--- @ty.aicoding@<timestamp> ---` markers in their JSDo
 
 - State and DB: `~/.dsh/state/superagent/`. Startup logs: `.artifacts/dsh-superagent-superagent-<date>-<pid>.log` (rarely more than the `dsh web:` URL — the DSH logger is in-memory). Runtime state lives in the SQLite tables, not in logs.
 - Management API is loopback, same-origin only: any request needs `Host: 127.0.0.1:3082` and header `x-orchestrator-request: 1`, e.g. `curl -s -H 'x-orchestrator-request: 1' http://127.0.0.1:3082/orchestrator/api/sources`.
+- **Skill catalog cost.** Every model-invocable skill's name and description joins the prompt as a durable catalog on each Session, so a large shared root is paid for on every request. This machine therefore exports `DSH_AGENTS_HOME="$HOME/.dsh"` from `~/.zshrc`, which makes DSH scan only `~/.dsh/skills` instead of also scanning `~/.agents/skills` (119 skills, about 19k characters). A skill from `~/.agents/skills` reaches DSH by symlinking it into `~/.dsh/skills`. DSH rejects this variable from a `.env` file — it must come from the launching shell, so start the service from a shell that has it, as `scripts/dsh-superagent` inherits its own environment.
