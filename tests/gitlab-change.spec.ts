@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Ticket } from '../src/core/index.ts'
 import type { Deployment } from '../src/deployment.ts'
 import type { SourceContext } from '../src/sources/host.ts'
+import { claimChange } from '../src/sources/change.ts'
 import { asChange, claimMr, gitlabChange, mrOf, mrsOf, pollTicketMrs, readMr, type GitlabMr } from '../src/sources/gitlab-change.ts'
 
 const project: NonNullable<Deployment['gitlab']> = { url: 'https://gitlab.example.com', host: 'gitlab.example.com',
@@ -15,17 +16,17 @@ const context = (options: { mr?: GitlabMr; fail?: Error; tickets?: Ticket[]; dep
     if (options.fail) throw options.fail
     return JSON.stringify(options.mr ?? mr())
   })
-  const patch = vi.fn(), describe = vi.fn(), threadClosed = vi.fn()
+  const patch = vi.fn(), describe = vi.fn(), threadClosed = vi.fn(), bindThread = vi.fn()
   const ctx = {
     deployment: { gitlab: options.deployment ?? project },
     commands: { run, withSignal: vi.fn(() => ({ run })) },
     config: () => ({}),
-    tickets: { open: () => options.tickets ?? [], get: vi.fn(), threadClosed },
+    tickets: { open: () => options.tickets ?? [], get: vi.fn(), threadClosed, bindThread },
     threads: { patch, describe },
     atomic: (action: () => void) => action(),
     triggers: { get: () => undefined },
   } as unknown as SourceContext
-  return { ctx, run, patch, describe, threadClosed }
+  return { ctx, run, patch, describe, threadClosed, bindThread }
 }
 const followed = (thread: string, closed = false): Ticket => ({ follows: [{ thread, closed }] } as unknown as Ticket)
 
@@ -69,6 +70,20 @@ describe('GitLab merge requests as changes', () => {
     expect(run).toHaveBeenCalledWith('glab-agent', ['api', '--hostname', 'gitlab.example.com', 'projects/group%2Fproject/merge_requests/5'])
     await expect(readMr(ctx, { gitlab: undefined }, 5)).rejects.toThrow('no GitLab project')
     expect(claimMr({ ...context().ctx, deployment: { gitlab: undefined } } as SourceContext, 'ticket-1', mr())).toBe('This installation has no GitLab project')
+  })
+  /**
+   * A bound merge request must be findable again by `mrOf`, or its merge would never end the ticket: the follow is stored under
+   * the key `gitlab:mr:<iid>`, which is what `changeRef` derives from `host.thread`, not the bare IID.
+   * --- @ty.aicoding@1793938961579 ---
+   */
+  it('binds a merge request to a ticket under the thread key it can read back', () => {
+    const ticket = { id: 'ticket-1', follows: [], execution: { name: 'ticket' }, origin: { triggerId: 't' } } as unknown as Ticket
+    const { ctx, bindThread } = context({ tickets: [ticket] })
+    ;(ctx.tickets as unknown as { get: () => Ticket }).get = () => ticket
+    const host = gitlabChange({ gitlab: project })!
+    expect(claimChange(ctx, host, 'ticket-1', asChange(mr(), 'group/project'))).toBeUndefined()
+    expect(bindThread).toHaveBeenCalledWith('ticket-1', { source: 'gitlab', id: 'mr:5' }, true)
+    expect(mrOf({ follows: [{ thread: 'gitlab:mr:5' }] } as unknown as Ticket)).toBe(5)
   })
   it('treats only its own thread keys as followed merge requests', () => {
     const ticket = { follows: [{ thread: 'github:pull:3' }, { thread: 'gitlab:mr:5' }, { thread: 'gitlab:mr:7', closed: true }] } as unknown as Ticket
