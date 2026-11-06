@@ -57,9 +57,17 @@ declare module '@deepseek-ai/cordis' {
  * subagents. It gets no other tool the profile has, whenever it was registered: none that asks or shows a person something,
  * changes the profile, schedules work or starts goals outside the worker slots, the pause and a person's hold, starts or
  * messages other Sessions, or edits documents.
+ * --- @ty.aicoding@1793882937722 ---
  */
 const WORK_TOOLS = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill', 'web_search',
   'web_fetch', 'skill', 'todo_write', 'subagent', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent']
+/**
+ * Tools an MCP server contributes, by the `mcp__<server>__<tool>` name DSH gives them. A worker keeps every one its preset
+ * exposes, so a Source's skills can query logs, pipelines or databases; the list is read from the profile, never widened by
+ * the agent, and the Source's own account still decides what each call may reach.
+ * --- @ty.aicoding@1793882937722 ---
+ */
+const MCP_TOOL = /^mcp__[A-Za-z0-9_-]+__/
 /** What the main Session is told when it would wait: what it waits for comes to it, and a waiting step holds back the next. */
 const NO_WAIT = 'Reports, follow_up notices, new candidates and a background job\'s end with its output arrive by themselves as messages; '
   + 'end the turn instead of waiting for them.'
@@ -285,11 +293,16 @@ export class Sessions {
    * ended. A failed or blocked worker keeps its tools, so a person may continue it in its Session; only automated input waits
    * (see the executor). Read inherited tools through the parent scope, which includes the preset's tools. The global view
    * misses preset tools; the agent's own view also includes local tools such as subagent, which restrict refuses to name.
+   * MCP tools come from the profile's servers, so they join the set by their `mcp__` name rather than by a fixed list.
+   * --- @ty.aicoding@1793882937722 ---
    */
   private workOnly(agent: Agent, ticketId: string): (() => void)[] {
     const store = this.host.store
     const parent = scopeParentOf(agent)
-    const allow = WORK_TOOLS.filter(name => agent.ctx.tools.get(name, parent))
+    // Enumerate the inherited surface once: a name is kept when it is a work tool or an MCP tool that exists in this profile.
+    const inherited = agent.ctx.tools.schemas(parent).map(schema => schema.name)
+    const allow = [...WORK_TOOLS, ...inherited.filter(name => MCP_TOOL.test(name))]
+      .filter(name => agent.ctx.tools.get(name, parent))
     return [agent.ctx.tools.restrict({ allow }), agent.ctx.tools.guard(() => {
       const current = store.tickets.get(ticketId)
       return !current || !liveTicket(current) ? 'Ticket ended; new work needs a new authorized ticket' : undefined

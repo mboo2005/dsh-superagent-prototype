@@ -175,6 +175,8 @@ beforeEach(async () => {
           const own = scope === agents.get(sessionId)
           return (scope === preset || own) && inherited.includes(name) || own && name === 'subagent' ? { name } : undefined
         },
+        // The inherited surface, as DSH reports it: the preset's tools plus any MCP server's.
+        schemas: (scope?: object) => (scope === preset ? inherited : []).map(name => ({ name, description: '', parameters: {} })),
         restrict: vi.fn((rule: { allow: string[] }) => {
           if (rule.allow.some(name => !inherited.includes(name))) throw new Error('Restriction names a non-inherited tool')
           restricts.set(sessionId, [...restricts.get(sessionId) ?? [], rule]); return () => {}

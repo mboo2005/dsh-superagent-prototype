@@ -107,7 +107,7 @@ async function start() {
     const own = new Map<string, Tool>(), registered: Skill[] = []
     tools.set(sessionId, own); skills.set(sessionId, registered)
     const register = (tool: Tool) => { own.set(tool.name, tool); return () => own.delete(tool.name) }
-    agentCtx.reflect.provide('tools', { register, get: () => undefined, restrict: () => () => {}, guard: () => () => {} })
+    agentCtx.reflect.provide('tools', { register, get: () => undefined, schemas: () => [], restrict: () => () => {}, guard: () => () => {} })
     agentCtx.reflect.provide('skills', { register: (skill: Skill) => { registered.push(skill); return () => {} } })
     const section = (spec: { text: Section }) => { sections.set(sessionId, spec.text); return () => {} }
     agentCtx.reflect.provide('systemPrompt', { section })
