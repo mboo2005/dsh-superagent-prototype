@@ -16,6 +16,8 @@ The first poll of a subscribed thread records its newest note id and receives no
 
 The prefix is what separates the agent's writing from a person's when both use one account, which is the usual GitLab setup: `account` names the operator's own user, and the agent signs in with it. A note from that account is the agent's only when it opens with `[aibot]` or carries the hidden marker; every other note from it is the person's and is received like any other. Without the prefix, the Source could not tell a person's comment from its own reply, and skipping the account would drop every follow-up a person writes.
 
+A reviewer who only approves writes no note, so the Source reads the merge request's approvals alongside it and states a verdict once on its Thread, as a message the ticket's worker receives: `alice approved MR #5`. The agent's own approval is ignored, and an instance that does not serve the approvals endpoint reports none rather than failing the poll. GitLab 14.9, the version this Source was verified against, has no request-changes verdict to read, so a reviewer asking for changes still reaches the ticket through the note they write.
+
 ## Configuration
 
 Add a **GitLab** Source in the panel, or insert a settings block with kind `gitlab`:
@@ -51,6 +53,7 @@ The execution environment exposes `DSH_SUPERAGENT_GITLAB_URL`, `DSH_SUPERAGENT_G
 | Pending to-dos | `GET todos?state=pending&per_page=100` |
 | New Issues and MRs | `GET projects/<encoded project>/(issues\|merge_requests)?state=opened&sort=asc&order_by=updated_at&per_page=100&updated_after=<ISO 8601>` |
 | Read an Issue or MR | `GET projects/<encoded project>/issues/<iid>` or `merge_requests/<iid>` |
+| Approvals of an MR | `GET projects/<encoded project>/merge_requests/<iid>/approvals`, only while the MR is open; a 404 means the instance serves none |
 | Notes | `GET projects/<encoded project>/(issues\|merge_requests)/<iid>/notes?sort=asc&order_by=created_at&per_page=100` for context; polling asks for `sort=desc` so the newest notes are never behind an old page |
 | Reply | `POST projects/<encoded project>/(issues\|merge_requests)/<iid>/notes` with `body` |
 

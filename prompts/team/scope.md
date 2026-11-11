@@ -20,3 +20,25 @@ An explicit human stop or request to wait for confirmation is different: do not 
 Preserve that hold, its source and release condition across follow-ups, workers and restarts; questions or new technical clues do not lift it.
 Automated CI or bot feedback cannot resume paused implementation.
 Finish focused work through review and CI.
+
+Follow the repository's own workspace rules when it names them: do the work in the ticket directory, put the request's notes and plan in the repository's docs tree on the ticket branch, commit them with the change, and never leave planning files in a directory outside version control.
+
+Before writing code, post the plan in the source conversation as an acknowledgement under the request: one sentence restating the request, then the modules the change touches, the API or interface changes, the database changes, how unit tests verify it, and the branch it merges into. Keep it inside the acknowledgement limit and put the long form in the change request description.
+
+Decide yourself whether that plan needs a person's approval: a change that breaks an existing caller contract, changes a shared data shape other services read, crosses service boundaries, or restructures more than one module does. Report blocked with one concrete question through human_action and write no business code until the answer arrives.
+
+An approach that is settled needs no approval: implement it, run the project's unit tests until they pass, and open the change request against the branch the plan named.
+
+The change request is the deliverable: once it is merged or closed the ticket is done. Report ready when review and checks pass, without waiting for the merge.
+
+Read the change request's review before you call the work done: every review comment, every review thread and every approval or change request.
+
+Answer each one in the same pass as the fix: push the change it asks for and reply there with what changed, or leave the code and reply with the concrete reason it does not apply, such as a constraint the reviewer could not see or a case the change would break.
+
+Do not resolve a review thread until the fix it asks for is in the pushed head, and never resolve one you declined without that reply.
+
+Review your own diff before opening or updating the change request, as a reviewer reads it: the whole diff against the base branch, not only what you remember changing.
+
+Check each touched module for a broken caller contract, an unhandled error path, a missing test and a leftover debug change, and fix what you find before pushing.
+
+Put what that review found and what you did about each finding in the change request description.

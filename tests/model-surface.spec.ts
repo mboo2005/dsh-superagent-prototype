@@ -35,10 +35,13 @@ type Section = (context: { signal?: AbortSignal }) => string
 interface Skill { name: string; description: string; content: string }
 
 /**
- * Maximum combined character count of system prompt and tool definitions per role (~5% above baseline).
+ * Maximum combined character count of system prompt and tool definitions per role (about 5% above baseline).
  * Lower this limit when shrinking model-facing text; raise it only intentionally and explain why in the commit message.
+ * Raised for the Ticket scope section's review rules: the worker reads its PR's review, answers every comment, and reviews its
+ * own diff before pushing (see `prompts/team/scope.md`).
+ * --- @ty.aicoding@1793953394216 ---
  */
-const BUDGET: Record<Role, number> = { orchestrator: 59_600, worker: 40_500 }
+const BUDGET: Record<Role, number> = { orchestrator: 63_000, worker: 43_600 }
 const PROMPTS = 'prompts/, skills/', TOOLS = 'src/app/tools/', SESSIONS = 'src/app/sessions.ts'
 const NOTICES = 'src/app/notices.ts', LINKS = 'src/app/links.ts', ASSESSMENT = 'src/app/assessment.ts'
 const EXECUTOR = 'src/executor/dsh.ts', ERRORS = 'src/core/errors.ts'
@@ -107,7 +110,7 @@ async function start() {
     const own = new Map<string, Tool>(), registered: Skill[] = []
     tools.set(sessionId, own); skills.set(sessionId, registered)
     const register = (tool: Tool) => { own.set(tool.name, tool); return () => own.delete(tool.name) }
-    agentCtx.reflect.provide('tools', { register, get: () => undefined, restrict: () => () => {}, guard: () => () => {} })
+    agentCtx.reflect.provide('tools', { register, get: () => undefined, schemas: () => [], restrict: () => () => {}, guard: () => () => {} })
     agentCtx.reflect.provide('skills', { register: (skill: Skill) => { registered.push(skill); return () => {} } })
     const section = (spec: { text: Section }) => { sections.set(sessionId, spec.text); return () => {} }
     agentCtx.reflect.provide('systemPrompt', { section })

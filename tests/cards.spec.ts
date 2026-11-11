@@ -88,6 +88,14 @@ const RULES: [rule: string, file: string, says: string[], gone?: string[]][] = [
   ['Human attention is limited', 'team/communication', ['Human attention is limited']],
   ['Each automated reviewer gets at most three rounds per PR', 'team/communication', ['at most three review rounds per PR from each automated reviewer']],
   ['An incomplete draft is blocked, and every change is reviewed and checked', 'work', ['An incomplete draft is blocked', 'Review changes and run relevant checks']],
+  /**
+   * A worker answers every review comment, declines one only with a stated reason, and reviews its own diff before pushing.
+   * --- @ty.aicoding@1793953514418 ---
+   */
+  ['Every review comment is answered, a declined one with its reason, and the diff is reviewed before pushing', 'team/scope',
+    ['Read the change request\'s review before you call the work done', 'reply with the concrete reason it does not apply',
+      'Do not resolve a review thread until the fix it asks for is in the pushed head',
+      'Review your own diff before opening or updating the change request']],
   ['Investigation has no fixed round limit', 'team/scope', ['There is no fixed investigation or implementation round limit']],
   ['A resolved blocker resumes on its own; a person\'s hold lasts until a person lifts it', 'team/scope',
     ['resume autonomously without asking the human to say continue', 'questions or new technical clues do not lift it']],
