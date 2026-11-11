@@ -106,6 +106,8 @@ describe('GitLab merge requests as changes', () => {
     const { ctx, patch, describe, threadClosed } = context({ mr: mr({ state: 'merged', merged_at: '2026-02-01T00:00:00.000Z' }), tickets })
     await pollTicketMrs(ctx)
     expect(threadClosed).toHaveBeenCalledTimes(2)
+    // The close names the Thread `bind` stored, not the bare IID: `gitlab:<iid>` would match no follow and never end the ticket.
+    expect(threadClosed).toHaveBeenCalledWith({ source: 'gitlab', id: 'mr:5' }, 'merged', '2026-02-01T00:00:00.000Z')
     expect(describe).toHaveBeenCalledWith('gitlab:mr:5', expect.anything())
     expect(patch).toHaveBeenCalledWith('gitlab:mr:5', { pollError: undefined })
     const failing = context({ fail: new Error('glab failed'), tickets })

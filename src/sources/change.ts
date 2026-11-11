@@ -153,12 +153,14 @@ function bind(ctx: SourceContext, host: ChangeHost, ticketId: string, change: Ch
 /**
  * Reports a merged or closed change once to the open tickets that follow it, whose end the core decides.
  * Their subscription to the change's Thread stays so a later human comment there resumes the ticket.
- * --- @ty.aicoding@ ---
+ * The Thread is named the way `bind` stores it, not by the bare number: a GitLab follow is `gitlab:mr:<iid>`, so closing
+ * `gitlab:<iid>` would match no follow and the merge would never end the ticket.
+ * --- @ty.aicoding@1793962664800 ---
  */
 function closeChange(ctx: SourceContext, host: ChangeHost, change: Change): void {
   if (!ctx.tickets.open().some(ticket => changesOf(host, ticket, true).includes(change.id))) return
   const at = change.endedAt ?? new Date().toISOString()
-  ctx.tickets.threadClosed({ source: host.source, id: String(change.id) }, change.merged ? 'merged' : 'closed', at)
+  ctx.tickets.threadClosed(changeRef(host, change.id), change.merged ? 'merged' : 'closed', at)
 }
 /**
  * Builds idempotent outbound notices for IM conversations when a ticket ends with a change (selecting the last-closed change
